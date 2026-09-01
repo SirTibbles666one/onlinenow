@@ -1,40 +1,50 @@
 /**
- * OnlineNow — Classic Revenge 1.11.x (Bunny loader) / Discord 342
+ * OnlineNow — Classic Revenge 1.11 / Discord 342
  *
- * Bunny eval: (bunny,definePlugin)=>{ THIS_FILE; return plugin?.default ?? plugin; }
- * So `plugin` MUST be a top-level binding, not hidden inside an IIFE.
+ * Vendetta: module.exports = { onLoad, onUnload, settings }
+ * Bunny:    var plugin = ... ; return plugin?.default ?? plugin
  */
 var plugin = (function (root, bunnyApi) {
   "use strict";
 
   function vdRequire(id) {
+    var vd =
+      (typeof globalThis !== "undefined" && globalThis.vendetta) ||
+      (root && root.vendetta) ||
+      {};
     try {
       if (typeof require === "function") {
         var got = require(id);
         if (got) return got;
       }
     } catch (_) {}
-    var vendetta =
-      (root && root.vendetta) ||
-      (typeof globalThis !== "undefined" && globalThis.vendetta) ||
-      {};
+    if (vd && id.indexOf("@vendetta") === 0) {
+      if (id === "@vendetta/metro") return vd.metro;
+      if (id === "@vendetta/metro/common") return vd.metro && vd.metro.common;
+      if (id === "@vendetta/patcher") return vd.patcher;
+      if (id === "@vendetta/plugin") return vd.plugin;
+      if (id === "@vendetta/storage") return vd.storage;
+      if (id === "@vendetta/ui/toasts") return vd.ui && vd.ui.toasts;
+      if (id === "@vendetta/ui/components") return vd.ui && vd.ui.components;
+      if (id === "@vendetta") return vd;
+    }
     if (bunnyApi) {
-      if (id === "@vendetta/metro") return bunnyApi.metro || vendetta.metro;
+      if (id === "@vendetta/metro") return bunnyApi.metro || vd.metro;
       if (id === "@vendetta/metro/common")
-        return (bunnyApi.metro && bunnyApi.metro.common) || (vendetta.metro && vendetta.metro.common);
-      if (id === "@vendetta/patcher") return bunnyApi.patcher || vendetta.patcher;
-      if (id === "@vendetta/plugin") return bunnyApi.plugin || vendetta.plugin;
-      if (id === "@vendetta/storage") return bunnyApi.storage || vendetta.storage;
+        return (bunnyApi.metro && bunnyApi.metro.common) || (vd.metro && vd.metro.common);
+      if (id === "@vendetta/patcher") return bunnyApi.patcher || vd.patcher;
+      if (id === "@vendetta/plugin") return bunnyApi.plugin || vd.plugin;
+      if (id === "@vendetta/storage") return bunnyApi.storage || vd.storage;
       if (id === "@vendetta/ui/toasts")
-        return (bunnyApi.ui && bunnyApi.ui.toasts) || (vendetta.ui && vendetta.ui.toasts);
+        return (bunnyApi.ui && bunnyApi.ui.toasts) || (vd.ui && vd.ui.toasts);
       if (id === "@vendetta/ui/components")
-        return (bunnyApi.ui && bunnyApi.ui.components) || (vendetta.ui && vendetta.ui.components);
+        return (bunnyApi.ui && bunnyApi.ui.components) || (vd.ui && vd.ui.components);
     }
     var path = String(id)
       .replace(/^@vendetta\/?/, "")
       .split("/")
       .filter(Boolean);
-    var cur = vendetta;
+    var cur = vd;
     for (var i = 0; i < path.length; i++) cur = cur && cur[path[i]];
     return cur || null;
   }
@@ -103,6 +113,7 @@ var plugin = (function (root, bunnyApi) {
 
   var unpatches = [];
   var hooks = [];
+  var hookedPairs = [];
   var inFriend = false;
   var inDm = false;
 
@@ -288,6 +299,10 @@ var plugin = (function (root, bunnyApi) {
 
   function hook(host, method, wrap) {
     if (!host || typeof host[method] !== "function") return false;
+    for (var h = 0; h < hookedPairs.length; h++) {
+      if (hookedPairs[h][0] === host && hookedPairs[h][1] === method) return false;
+    }
+    hookedPairs.push([host, method]);
     function run(args, res) {
       var next;
       try {
@@ -732,13 +747,40 @@ var plugin = (function (root, bunnyApi) {
     );
   }
 
+  function whenReady(get, cb, label) {
+    var done = false;
+    function hit(m) {
+      if (done || !m) return;
+      done = true;
+      note("ready:" + label);
+      try {
+        cb(m);
+      } catch (err) {
+        note("ready err " + label + " " + err);
+      }
+    }
+    var n = 0;
+    (function tick() {
+      if (done) return;
+      var m = get();
+      if (m) return hit(m);
+      if (n++ >= 80) {
+        note("timeout:" + label);
+        return;
+      }
+      setTimeout(tick, 250);
+    })();
+  }
+
   function onLoad() {
     hooks = [];
     debugLog = [];
+    hookedPairs = [];
     note("bunny=" + (bunnyApi ? Object.keys(bunnyApi).slice(0, 12).join(",") : "no"));
     note("metro=" + Object.keys(metro || {}).slice(0, 12).join(","));
     note("after=" + typeof after + " instead=" + typeof instead);
     note("findByProps=" + typeof findByProps + " store=" + typeof findByStoreName);
+    note("waitFor=" + typeof (metro && metro.waitFor));
     note("react=" + !!React + " rn=" + !!ReactNative);
     try {
       patchFriends();
@@ -750,13 +792,34 @@ var plugin = (function (root, bunnyApi) {
       note("onLoad err " + err);
       console.error("[OnlineNow]", err);
     }
-    var rel = RelationshipStore();
-    var pre = PresenceStore();
-    var ch = ChannelStore();
-    note("RelationshipStore=" + !!(rel && rel.getFriendIDs));
-    note("PresenceStore=" + !!(pre && pre.getStatus));
-    note("ChannelStore=" + !!(ch && ch.getChannel));
-    toast(hooks.length ? "OnlineNow on · " + hooks.length + " hooks" : "OnlineNow on · 0 hooks — open plugin settings");
+    whenReady(RelationshipStore, function () {
+      patchFriends();
+    }, "RelationshipStore");
+    whenReady(PresenceStore, function () {
+      watchPresence();
+    }, "PresenceStore");
+    whenReady(
+      function () {
+        return byProps("getPrivateChannelIds") || byProps("getMutablePrivateChannels") || ChannelStore();
+      },
+      function () {
+        patchDms();
+      },
+      "PrivateChannels",
+    );
+    setTimeout(function () {
+      try {
+        patchStrip();
+        patchFriendHeaders();
+      } catch (_) {}
+      var rel = RelationshipStore();
+      var pre = PresenceStore();
+      var ch = ChannelStore();
+      note("RelationshipStore=" + !!(rel && rel.getFriendIDs));
+      note("PresenceStore=" + !!(pre && pre.getStatus));
+      note("ChannelStore=" + !!(ch && ch.getChannel));
+      toast(hooks.length ? "OnlineNow on · " + hooks.length + " hooks" : "OnlineNow on · 0 hooks — open plugin settings");
+    }, 2500);
   }
 
   function onUnload() {
@@ -785,7 +848,9 @@ if (typeof definePlugin === "function") {
   } catch (_) {}
 }
 
-if (typeof module === "object" && module.exports) {
-  module.exports = plugin;
-  module.exports.default = plugin;
-}
+try {
+  if (typeof module === "object" && module && module.exports) {
+    module.exports = plugin;
+    module.exports.default = plugin;
+  }
+} catch (_) {}
