@@ -40,16 +40,30 @@ var plugin = (function (root, bunnyApi) {
   }
 
   var metro = vdRequire("@vendetta/metro") || {};
+  if (!metro.findByProps && !metro.find) {
+    metro =
+      (bunnyApi && (bunnyApi.metro || (bunnyApi.api && bunnyApi.api.metro))) ||
+      (root && root.bunny && root.bunny.metro) ||
+      (root && root.vendetta && root.vendetta.metro) ||
+      metro;
+  }
   var findByProps = metro.findByProps;
-  var findByStoreName = metro.findByStoreName;
+  var findByStoreName = metro.findByStoreName || (metro.filters && metro.find
+    ? function (n) {
+        return metro.find(metro.filters.byStoreName ? metro.filters.byStoreName(n) : function (m) {
+          return m && m.getName && m.getName() === n;
+        });
+      }
+    : null);
   var findByName = metro.findByName;
   var findByDisplayName = metro.findByDisplayName;
-  var common = vdRequire("@vendetta/metro/common") || {};
-  var React = common.React;
-  var ReactNative = common.ReactNative;
-  var patcher = vdRequire("@vendetta/patcher") || {};
+  var common = vdRequire("@vendetta/metro/common") || (metro.common) || {};
+  var React = common.React || (root && root.React);
+  var ReactNative = common.ReactNative || (root && root.ReactNative);
+  var patcher = vdRequire("@vendetta/patcher") || (bunnyApi && bunnyApi.patcher) || {};
   var after = patcher.after;
-  var pluginApi = vdRequire("@vendetta/plugin") || {};
+  var instead = patcher.instead;
+  var pluginApi = vdRequire("@vendetta/plugin") || (bunnyApi && bunnyApi.plugin) || {};
   var storage = pluginApi.storage || {};
   var useProxy = (vdRequire("@vendetta/storage") || {}).useProxy;
   var Forms = (vdRequire("@vendetta/ui/components") || {}).Forms || {};
@@ -61,6 +75,14 @@ var plugin = (function (root, bunnyApi) {
   var ScrollView = ReactNative && ReactNative.ScrollView;
   var Pressable = ReactNative && ReactNative.Pressable;
   var StyleSheet = ReactNative && ReactNative.StyleSheet;
+
+  var debugLog = [];
+  function note(msg) {
+    debugLog.push(String(msg));
+    try {
+      console.log("[OnlineNow]", msg);
+    } catch (_) {}
+  }
 
   var DEFAULTS = {
     friendsGrouping: true,
@@ -114,11 +136,22 @@ var plugin = (function (root, bunnyApi) {
   }
 
   function byProps() {
+    var props = [].slice.call(arguments);
     try {
-      return findByProps && findByProps.apply(null, arguments);
-    } catch (_) {
-      return null;
-    }
+      if (findByProps) return findByProps.apply(null, props);
+    } catch (_) {}
+    try {
+      if (metro.find) {
+        return metro.find(function (m) {
+          if (!m) return false;
+          for (var i = 0; i < props.length; i++) {
+            if (m[props[i]] === undefined) return false;
+          }
+          return true;
+        });
+      }
+    } catch (_) {}
+    return null;
   }
 
   function PresenceStore() {
@@ -254,12 +287,49 @@ var plugin = (function (root, bunnyApi) {
   }
 
   function hook(host, method, wrap) {
-    if (!host || !after || typeof host[method] !== "function") return false;
+    if (!host || typeof host[method] !== "function") return false;
+    function run(args, res) {
+      var next;
+      try {
+        next = wrap(args, res);
+      } catch (err) {
+        note("wrap err " + method + " " + err);
+        return res;
+      }
+      if (next === undefined) return res;
+      if (Array.isArray(res) && Array.isArray(next) && res !== next) {
+        res.length = 0;
+        for (var i = 0; i < next.length; i++) res.push(next[i]);
+        return res;
+      }
+      return next;
+    }
     try {
-      unpatches.push(after(method, host, wrap));
-      hooks.push(method);
-      return true;
-    } catch (_) {
+      if (typeof after === "function") {
+        unpatches.push(
+          after(method, host, function (args, res) {
+            return run(args, res);
+          }),
+        );
+        hooks.push(method);
+        note("after:" + method);
+        return true;
+      }
+      if (typeof instead === "function") {
+        unpatches.push(
+          instead(method, host, function (args, orig) {
+            var res = orig.apply(host, args);
+            return run(args, res);
+          }),
+        );
+        hooks.push(method + "/instead");
+        note("instead:" + method);
+        return true;
+      }
+      note("no patcher for " + method);
+      return false;
+    } catch (err) {
+      note("hook fail " + method + " " + err);
       return false;
     }
   }
@@ -637,9 +707,9 @@ var plugin = (function (root, bunnyApi) {
       e(
         Text,
         { style: styles && styles.hint },
-        hooks.length
-          ? "Loaded. Hooks: " + hooks.join(", ")
-          : "Loaded but no Discord lists were hooked. Screenshot this page.",
+        (hooks.length ? "Hooks: " + hooks.join(", ") : "No hooks.") +
+          "\n" +
+          (debugLog.length ? debugLog.join("\n") : "No debug yet. Reload Discord."),
       ),
       TOGGLES.map(function (row) {
         return e(
@@ -664,6 +734,12 @@ var plugin = (function (root, bunnyApi) {
 
   function onLoad() {
     hooks = [];
+    debugLog = [];
+    note("bunny=" + (bunnyApi ? Object.keys(bunnyApi).slice(0, 12).join(",") : "no"));
+    note("metro=" + Object.keys(metro || {}).slice(0, 12).join(","));
+    note("after=" + typeof after + " instead=" + typeof instead);
+    note("findByProps=" + typeof findByProps + " store=" + typeof findByStoreName);
+    note("react=" + !!React + " rn=" + !!ReactNative);
     try {
       patchFriends();
       patchDms();
@@ -671,9 +747,16 @@ var plugin = (function (root, bunnyApi) {
       patchStrip();
       patchFriendHeaders();
     } catch (err) {
+      note("onLoad err " + err);
       console.error("[OnlineNow]", err);
     }
-    toast(hooks.length ? "OnlineNow on · " + hooks.length + " hooks" : "OnlineNow on · 0 hooks");
+    var rel = RelationshipStore();
+    var pre = PresenceStore();
+    var ch = ChannelStore();
+    note("RelationshipStore=" + !!(rel && rel.getFriendIDs));
+    note("PresenceStore=" + !!(pre && pre.getStatus));
+    note("ChannelStore=" + !!(ch && ch.getChannel));
+    toast(hooks.length ? "OnlineNow on · " + hooks.length + " hooks" : "OnlineNow on · 0 hooks — open plugin settings");
   }
 
   function onUnload() {
@@ -692,6 +775,7 @@ var plugin = (function (root, bunnyApi) {
     stop: onUnload,
     settings: Settings,
     Settings: Settings,
+    SettingsComponent: Settings,
   };
 })(typeof globalThis !== "undefined" ? globalThis : this, typeof bunny !== "undefined" ? bunny : null);
 
