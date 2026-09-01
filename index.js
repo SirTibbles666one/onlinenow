@@ -422,6 +422,127 @@
     });
   }
 
+  function fnNames(obj) {
+    if (!obj) return "none";
+    var out = [];
+    try {
+      var seen = {};
+      function walk(o) {
+        if (!o || seen[o]) return;
+        try { seen[o] = 1; } catch (_) { return; }
+        for (var k in o) {
+          try {
+            if (typeof o[k] === "function") out.push(k);
+          } catch (_) {}
+        }
+      }
+      walk(obj);
+      if (obj.prototype) walk(obj.prototype);
+      if (Object.getPrototypeOf) walk(Object.getPrototypeOf(obj));
+    } catch (_) {}
+    return out.slice(0, 50).join(",") || "no-fns";
+  }
+
+  function looksLikeIdList(res) {
+    if (!res) return false;
+    var arr = asArray(res);
+    if (arr.length < 2) return false;
+    var a = arr[0];
+    if (typeof a === "string" || typeof a === "number") return true;
+    if (a && typeof a === "object" && (a.id || a.recipients || a.lastMessageId != null)) return true;
+    return false;
+  }
+
+  function sortUnknown(res) {
+    var arr = asArray(res);
+    if (!arr.length) return res;
+    if (typeof arr[0] === "object") return sortChannels(arr);
+    return sortIds(arr);
+  }
+
+  function wrapCompare(host, method) {
+    if (!host || typeof host[method] !== "function" || !instead) return false;
+    for (var h = 0; h < hookedPairs.length; h++) {
+      if (hookedPairs[h][0] === host && hookedPairs[h][1] === method) return false;
+    }
+    hookedPairs.push([host, method]);
+    try {
+      unpatches.push(
+        instead(method, host, function (args, orig) {
+          try {
+            if (!storage.dmOnlineFirst || !args || args.length < 2) return orig.apply(host, args);
+            var ra = rankChannel(args[0]);
+            var rb = rankChannel(args[1]);
+            if (ra !== rb) return ra - rb;
+          } catch (_) {}
+          return orig.apply(host, args);
+        }),
+      );
+      hooks.push("instead:" + method);
+      note("instead:" + method);
+      return true;
+    } catch (err) {
+      note("instead fail " + method + " " + err);
+      return false;
+    }
+  }
+
+  function hookArrayGetters(store, label) {
+    if (!store) return;
+    note(label + " " + fnNames(store));
+    var names = [];
+    try {
+      for (var k in store) {
+        try {
+          if (typeof store[k] === "function") names.push(k);
+        } catch (_) {}
+      }
+    } catch (_) {}
+    for (var i = 0; i < names.length; i++) {
+      var method = names[i];
+      if (/compare|sortChannels|sortPrivate/i.test(method)) {
+        wrapCompare(store, method);
+        continue;
+      }
+      if (!/get|list|ids|channels|preview|inbox|rows|items|sections|snapshot|private|dm/i.test(method)) continue;
+      if (/getStatus|getUser|getChannel$|getDMFromUserId|getCurrentUser|addChange|removeChange|emit|dispatch/.test(method)) continue;
+      hookAll(store, method, function (_a, res) {
+        if (inDm) return res;
+        if (!looksLikeIdList(res)) return res;
+        inDm = true;
+        try {
+          return sortUnknown(res);
+        } catch (_) {
+          return res;
+        } finally {
+          inDm = false;
+        }
+      });
+    }
+    try {
+      if (typeof store.getState === "function") {
+        hookAll(store, "getState", function (_a, state) {
+          if (!state || inDm) return state;
+          var keys = ["channelIds", "privateChannelIds", "dmIds", "ids", "channels"];
+          var changed = false;
+          var next = state;
+          for (var i = 0; i < keys.length; i++) {
+            var key = keys[i];
+            if (looksLikeIdList(state[key])) {
+              if (!changed) {
+                next = {};
+                for (var sk in state) next[sk] = state[sk];
+                changed = true;
+              }
+              next[key] = sortUnknown(state[key]);
+            }
+          }
+          return changed ? next : state;
+        });
+      }
+    } catch (_) {}
+  }
+
   function patchDms() {
     var wrapIds = function (_a, res) {
       if (inDm) return res;
@@ -463,21 +584,43 @@
       byStore("PrivateChannelSortStore"),
       byStore("PrivateChannelPreviewsStore"),
       byStore("PrivateChannelListStore"),
+      byStore("InboxStore"),
+      byStore("ChannelListStore"),
+      byStore("MessagePreviewStore"),
       byProps("getPrivateChannelIds"),
       byProps("getSortedPrivateChannels"),
       byProps("getPrivateChannelList"),
       byProps("getMutablePrivateChannels"),
+      byProps("getChannelPreviews"),
     ];
+    try {
+      if (typeof metro.findAll === "function") {
+        var extra = metro.findAll(function (m) {
+          return (
+            m &&
+            (typeof m.getPrivateChannelIds === "function" ||
+              typeof m.getSortedPrivateChannels === "function" ||
+              typeof m.getChannelPreviews === "function")
+          );
+        });
+        if (extra && extra.length) {
+          for (var xi = 0; xi < extra.length; xi++) mods.push(extra[xi]);
+        }
+      }
+    } catch (_) {}
     var seen = [];
     for (var i = 0; i < mods.length; i++) {
       var m = mods[i];
       if (!m || seen.indexOf(m) >= 0) continue;
       seen.push(m);
       hookAll(m, "getPrivateChannelIds", wrapIds);
+      hookAll(m, "getSortedPrivateChannelIds", wrapIds);
       hookAll(m, "getSortedPrivateChannels", wrapList);
       hookAll(m, "getPrivateChannelList", wrapList);
+      hookAll(m, "getChannelPreviews", wrapList);
       hookAll(m, "getMutablePrivateChannels", wrapMap);
       hookAll(m, "getPrivateChannels", wrapMap);
+      hookArrayGetters(m, "dmStore" + i);
     }
   }
 
@@ -838,6 +981,105 @@
     })();
   }
 
+  function isPrivateData(data) {
+    var arr = asArray(data);
+    if (arr.length < 2) return false;
+    var ch = ChannelStore();
+    var hits = 0;
+    var n = Math.min(arr.length, 10);
+    for (var i = 0; i < n; i++) {
+      var item = arr[i];
+      var id = item && (item.id || item.channel_id || item.channelId || item);
+      if (id == null || typeof id === "object") continue;
+      try {
+        var c = ch && ch.getChannel && ch.getChannel(String(id));
+        if (c && (c.type === 1 || c.type === 3)) {
+          hits++;
+          continue;
+        }
+      } catch (_) {}
+      if (rankUser(id) <= 3) hits++;
+    }
+    return hits >= 2;
+  }
+
+  function onlineHeader() {
+    if (!e || !Text) return null;
+    return e(
+      Text,
+      {
+        style: {
+          color: "#3ba55c",
+          paddingHorizontal: 16,
+          paddingTop: 10,
+          paddingBottom: 6,
+          fontWeight: "700",
+          fontSize: 13,
+        },
+      },
+      "OnlineNow · online people first",
+    );
+  }
+
+  function restyleList(el) {
+    if (!el || !el.props || !React) return el;
+    var data = el.props.data;
+    if (!isPrivateData(data)) return el;
+    var sorted = sortUnknown(data);
+    var next = {
+      data: sorted,
+      extraData: "onlinenow-" + (sorted && sorted[0]),
+    };
+    if (!el.props.ListHeaderComponent) next.ListHeaderComponent = onlineHeader;
+    try {
+      if (React.cloneElement) return React.cloneElement(el, next);
+    } catch (_) {}
+    return el;
+  }
+
+  function restyleTitle(el) {
+    if (!el || !el.props) return el;
+    var kids = el.props.children;
+    if (kids !== "Messages" && kids !== "Friends") return el;
+    try {
+      if (React && React.cloneElement) {
+        return React.cloneElement(el, { children: kids + " · OnlineNow" });
+      }
+    } catch (_) {}
+    return el;
+  }
+
+  function patchJsxLists() {
+    var jsx = byProps("jsx", "jsxs");
+    var inJsx = false;
+    function wrap(args, ret) {
+      if (inJsx || !ret || !ret.props) return ret;
+      inJsx = true;
+      try {
+        var titled = restyleTitle(ret);
+        if (titled !== ret) {
+          note("jsx title");
+          return titled;
+        }
+        if (ret.props.data && isPrivateData(ret.props.data)) {
+          note("jsx list n=" + asArray(ret.props.data).length);
+          return restyleList(ret);
+        }
+      } catch (err) {
+        note("jsx wrap " + err);
+      } finally {
+        inJsx = false;
+      }
+      return ret;
+    }
+    if (jsx) {
+      hookAll(jsx, "jsx", wrap);
+      hookAll(jsx, "jsxs", wrap);
+    } else if (React && typeof React.createElement === "function") {
+      hookAll(React, "createElement", wrap);
+    }
+  }
+
   function onLoad() {
     hooks = [];
     debugLog = [];
@@ -856,6 +1098,7 @@
       patchStrip();
       patchFriendHeaders();
       patchVisibleBadge();
+      patchJsxLists();
     } catch (err) {
       note("onLoad err " + err);
       console.error("[OnlineNow]", err);
@@ -879,13 +1122,15 @@
       try {
         patchStrip();
         patchFriendHeaders();
+        patchJsxLists();
       } catch (_) {}
       var rel = RelationshipStore();
       var pre = PresenceStore();
       var ch = ChannelStore();
-      note("RelationshipStore=" + !!(rel && rel.getFriendIDs));
-      note("PresenceStore=" + !!(pre && pre.getStatus));
-      note("ChannelStore=" + !!(ch && ch.getChannel));
+      note("RelationshipStore=" + !!(rel && rel.getFriendIDs) + " " + fnNames(rel));
+      note("PresenceStore=" + !!(pre && pre.getStatus) + " " + fnNames(pre));
+      note("ChannelStore=" + !!(ch && ch.getChannel) + " " + fnNames(ch));
+      note("PrivateChannelSortStore " + fnNames(byStore("PrivateChannelSortStore")));
       toast(hooks.length ? "OnlineNow on · " + hooks.length + " hooks" : "OnlineNow on · 0 hooks — open plugin settings");
     }, 2500);
   }
