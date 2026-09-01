@@ -83,7 +83,6 @@
   var Pressable = ReactNative && ReactNative.Pressable;
   var StyleSheet = ReactNative && ReactNative.StyleSheet;
   var TextInput = ReactNative && ReactNative.TextInput;
-  var Image = ReactNative && ReactNative.Image;
 
   var debugLog = [];
   function note(msg) {
@@ -914,7 +913,6 @@
         flexDirection: "row",
         alignItems: "center",
         paddingVertical: 8,
-        gap: 12,
       },
       avatar: {
         width: 36,
@@ -923,6 +921,7 @@
         backgroundColor: "#2b2d31",
         alignItems: "center",
         justifyContent: "center",
+        marginRight: 12,
       },
       avatarText: { color: "#f2f3f5", fontWeight: "700", fontSize: 13 },
       name: { color: "#f2f3f5", fontSize: 16, fontWeight: "600" },
@@ -999,15 +998,6 @@
     }
   }
 
-  function userAvatar(id) {
-    try {
-      var us = byStore("UserStore");
-      var u = us && us.getUser && us.getUser(String(id));
-      if (u && typeof u.getAvatarURL === "function") return u.getAvatarURL(null, 80, false);
-    } catch (_) {}
-    return null;
-  }
-
   function listFriends(query) {
     var rel = RelationshipStore();
     var ids = [];
@@ -1075,6 +1065,16 @@
     }
   }
 
+  function st() {
+    var out = {};
+    for (var i = 0; i < arguments.length; i++) {
+      var s = arguments[i];
+      if (!s) continue;
+      for (var k in s) out[k] = s[k];
+    }
+    return out;
+  }
+
   var STATUS_META = {
     pinned: { label: "PINNED", color: "#f2f3f5" },
     online: { label: "ONLINE", color: "#3ba55c" },
@@ -1115,6 +1115,7 @@
       }, []);
     }
     if (!e) return null;
+    try {
     var rows = listFriends(query);
     var counts = { online: 0, idle: 0, dnd: 0, offline: 0, pinned: 0 };
     for (var i = 0; i < rows.length; i++) {
@@ -1167,21 +1168,18 @@
         kids.push(
           e(
             Text,
-            { key: "sec-" + sec, style: [styles && styles.section, { color: meta.color }] },
+            { key: "sec-" + sec, style: st(styles && styles.section, { color: meta.color }) },
             meta.label + " · " + (counts[sec] || 0),
           ),
         );
       }
       (function (item) {
-        var av = userAvatar(item.id);
         var initial = (item.name || "?").slice(0, 1).toUpperCase();
         kids.push(
           e(
             View,
             { key: item.id, style: styles && styles.friend },
-            av && Image
-              ? e(Image, { source: { uri: av }, style: styles && styles.avatar })
-              : e(View, { style: styles && styles.avatar }, e(Text, { style: styles && styles.avatarText }, initial)),
+            e(View, { style: styles && styles.avatar }, e(Text, { style: styles && styles.avatarText }, initial)),
             e(
               Pressable,
               {
@@ -1207,7 +1205,7 @@
         );
       })(row);
     }
-    kids.push(e(Text, { key: "opt", style: [styles && styles.section, { color: "#8b8f98" }] }, "OPTIONS"));
+    kids.push(e(Text, { key: "opt", style: st(styles && styles.section, { color: "#8b8f98" }) }, "OPTIONS"));
     for (var t = 0; t < TOGGLES.length; t++) {
       (function (tog) {
         kids.push(
@@ -1246,7 +1244,7 @@
       kids.push(
         e(
           Text,
-          { key: "log", style: styles && styles.hint, selectable: true },
+          { key: "log", style: styles && styles.hint },
           (hooks.length ? "Hooks: " + hooks.join(", ") : "No hooks yet.") +
             "\n\n" +
             (log.length ? log.join("\n") : "Enable, wait 3s, reopen."),
@@ -1254,6 +1252,15 @@
       );
     }
     return e(ScrollView, { style: styles && styles.page, contentContainerStyle: styles && styles.pad }, kids);
+    } catch (err) {
+      note("page err " + err);
+      return e(
+        ScrollView,
+        { style: styles && styles.page },
+        e(Text, { style: styles && styles.title }, "OnlineNow"),
+        e(Text, { style: styles && styles.hint }, "Page error: " + String(err)),
+      );
+    }
   }
 
   function patchVisibleBadge() {
@@ -1688,10 +1695,12 @@
       watchPresence();
       patchStrip();
       patchFriendHeaders();
-      patchVisibleBadge();
-      patchJsxLists();
-      patchListModules();
       registerOnlineNowSection();
+      if (storage.patchDiscordLists) {
+        patchVisibleBadge();
+        patchJsxLists();
+        patchListModules();
+      }
     } catch (err) {
       note("onLoad err " + err);
       console.error("[OnlineNow]", err);
@@ -1713,15 +1722,17 @@
     );
     setTimeout(function () {
       try {
-        patchListModules();
+        if (storage.patchDiscordLists) patchListModules();
       } catch (_) {}
     }, 1000);
     setTimeout(function () {
       try {
-        patchStrip();
-        patchFriendHeaders();
-        patchJsxLists();
-        patchListModules();
+        if (storage.patchDiscordLists) {
+          patchStrip();
+          patchFriendHeaders();
+          patchJsxLists();
+          patchListModules();
+        }
       } catch (_) {}
       var rel = RelationshipStore();
       var pre = PresenceStore();
