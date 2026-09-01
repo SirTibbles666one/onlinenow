@@ -82,6 +82,8 @@
   var ScrollView = ReactNative && ReactNative.ScrollView;
   var Pressable = ReactNative && ReactNative.Pressable;
   var StyleSheet = ReactNative && ReactNative.StyleSheet;
+  var TextInput = ReactNative && ReactNative.TextInput;
+  var Image = ReactNative && ReactNative.Image;
 
   var debugLog = [];
   function note(msg) {
@@ -101,12 +103,14 @@
     splitDnd: true,
     dmOnlineFirst: true,
     dmStrip: true,
+    patchDiscordLists: false,
   };
 
   for (var k in DEFAULTS) {
     if (storage[k] === undefined) storage[k] = DEFAULTS[k];
   }
-  storage._v = 4;
+  storage._v = 5;
+  storage.patchDiscordLists = false;
   storage.dmOnlineFirst = true;
   storage.friendsGrouping = storage.friendsGrouping !== false;
   if (!Array.isArray(storage.pinnedIds)) storage.pinnedIds = [];
@@ -424,6 +428,7 @@
   }
 
   function patchFriends() {
+    if (!storage.patchDiscordLists) return;
     var store = RelationshipStore();
     hookAll(store, "getFriendIDs", function (_a, ids) {
       if (inFriend) return ids;
@@ -571,6 +576,7 @@
   }
 
   function patchDms() {
+    if (!storage.patchDiscordLists) return;
     var wrapIds = function (_a, res) {
       if (inDm) return res;
       inDm = true;
@@ -806,6 +812,7 @@
   }
 
   function patchStrip() {
+    if (!storage.patchDiscordLists) return;
     var found = findComp([
       "ConnectedPrivateChannels",
       "PrivateChannels",
@@ -837,6 +844,7 @@
   }
 
   function patchFriendHeaders() {
+    if (!storage.patchDiscordLists) return;
     var found = findComp(["FriendRow", "FriendsRow", "PeopleListItem", "FriendsListItem", "UserListItem"]);
     if (!found) return;
     var lastStatus = { id: null };
@@ -881,9 +889,51 @@
   var styles =
     StyleSheet &&
     StyleSheet.create({
-      page: { paddingVertical: 8, paddingHorizontal: 16 },
-      title: { color: "#f2f3f5", fontSize: 16, fontWeight: "700", marginBottom: 8 },
-      hint: { color: "#8b8f98", fontSize: 12, marginBottom: 16, lineHeight: 18 },
+      page: { flex: 1, backgroundColor: "#1e1f22" },
+      pad: { paddingVertical: 8, paddingHorizontal: 16 },
+      title: { color: "#f2f3f5", fontSize: 20, fontWeight: "700", marginBottom: 4 },
+      hint: { color: "#8b8f98", fontSize: 12, marginBottom: 12, lineHeight: 18 },
+      search: {
+        backgroundColor: "#2b2d31",
+        color: "#f2f3f5",
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        fontSize: 16,
+        marginBottom: 12,
+      },
+      section: {
+        color: "#3ba55c",
+        fontSize: 11,
+        fontWeight: "700",
+        letterSpacing: 1.2,
+        paddingTop: 14,
+        paddingBottom: 6,
+      },
+      friend: {
+        flexDirection: "row",
+        alignItems: "center",
+        paddingVertical: 8,
+        gap: 12,
+      },
+      avatar: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: "#2b2d31",
+        alignItems: "center",
+        justifyContent: "center",
+      },
+      avatarText: { color: "#f2f3f5", fontWeight: "700", fontSize: 13 },
+      name: { color: "#f2f3f5", fontSize: 16, fontWeight: "600" },
+      sub: { color: "#8b8f98", fontSize: 12, marginTop: 2 },
+      msg: {
+        backgroundColor: "#3ba55c",
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 8,
+      },
+      msgText: { color: "#fff", fontSize: 13, fontWeight: "700" },
       row: {
         flexDirection: "row",
         alignItems: "center",
@@ -891,16 +941,19 @@
         paddingVertical: 12,
       },
       label: { color: "#f2f3f5", fontSize: 16, fontWeight: "600", maxWidth: 240 },
-      sub: { color: "#8b8f98", fontSize: 12, marginTop: 4, maxWidth: 240 },
+      debugBtn: { color: "#8b8f98", fontSize: 13, paddingVertical: 12 },
     });
 
   var TOGGLES = [
-    ["friendsGrouping", "Online first on Friends", "All tab: Online, Idle, DND, Offline"],
+    [
+      "patchDiscordLists",
+      "Also sort Discord Friends/Messages",
+      "Off = OnlineNow page only (safe). On can crash FastestList.",
+    ],
+    ["friendsGrouping", "Group this page by status", "Pinned, Online, Idle, DND, Offline"],
     ["splitIdle", "Keep Idle separate", "Otherwise Idle counts as online"],
     ["splitDnd", "Keep DND separate", "Otherwise DND counts as online"],
-    ["dmOnlineFirst", "Online first on Messages", "People who are around sit at the top"],
-    ["dmStrip", "Online-now strip on Chat", "Avatars of people who are around"],
-    ["hideOffline", "Hide Offline on Friends", "Drop Offline from the All tab"],
+    ["hideOffline", "Hide Offline on this page", "Drop Offline from the list"],
   ];
 
   function Switch(props) {
@@ -935,42 +988,272 @@
     );
   }
 
+  function userName(id) {
+    try {
+      var us = byStore("UserStore");
+      var u = us && us.getUser && us.getUser(String(id));
+      if (!u) return String(id).slice(0, 8);
+      return u.globalName || u.displayName || u.username || String(id).slice(0, 8);
+    } catch (_) {
+      return String(id).slice(0, 8);
+    }
+  }
+
+  function userAvatar(id) {
+    try {
+      var us = byStore("UserStore");
+      var u = us && us.getUser && us.getUser(String(id));
+      if (u && typeof u.getAvatarURL === "function") return u.getAvatarURL(null, 80, false);
+    } catch (_) {}
+    return null;
+  }
+
+  function listFriends(query) {
+    var rel = RelationshipStore();
+    var ids = [];
+    try {
+      ids = asArray(rel && rel.getFriendIDs && rel.getFriendIDs());
+    } catch (_) {}
+    var q = String(query || "").trim().toLowerCase();
+    var rows = [];
+    for (var i = 0; i < ids.length; i++) {
+      var id = String(ids[i]);
+      var name = userName(id);
+      if (q && name.toLowerCase().indexOf(q) < 0 && id.indexOf(q) < 0) continue;
+      var st = statusOf(id);
+      if (storage.hideOffline && st !== "online" && st !== "idle" && st !== "dnd" && !isPinned(id)) continue;
+      rows.push({
+        id: id,
+        name: name,
+        status: isPinned(id) ? "pinned" : st,
+        rank: isPinned(id) ? -1 : rankUser(id),
+      });
+    }
+    rows.sort(function (a, b) {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      return a.name.localeCompare(b.name);
+    });
+    return rows;
+  }
+
+  function openDM(userId) {
+    userId = String(userId);
+    try {
+      var opener = byProps("openPrivateChannel");
+      if (opener && typeof opener.openPrivateChannel === "function") {
+        opener.openPrivateChannel(userId);
+        note("dmOpen=openPrivateChannel");
+        return;
+      }
+    } catch (err) {
+      note("dmOpen a " + err);
+    }
+    try {
+      var cs = ChannelStore();
+      var cid = cs && cs.getDMFromUserId && cs.getDMFromUserId(userId);
+      var jump = byProps("transitionToGuild") || byProps("selectChannel") || byProps("jumpToChannel");
+      if (cid && jump) {
+        if (jump.selectChannel) jump.selectChannel({ channelId: cid, guildId: null });
+        else if (jump.jumpToChannel) jump.jumpToChannel(cid);
+        else if (jump.transitionToGuild) jump.transitionToGuild(null, cid);
+        note("dmOpen=channel " + cid);
+        return;
+      }
+    } catch (err) {
+      note("dmOpen b " + err);
+    }
+    try {
+      var flux = (common && common.FluxDispatcher) || byProps("dispatch", "subscribe");
+      var cs2 = ChannelStore();
+      var cid2 = cs2 && cs2.getDMFromUserId && cs2.getDMFromUserId(userId);
+      if (flux && flux.dispatch && cid2) {
+        flux.dispatch({ type: "CHANNEL_SELECT", channelId: cid2, guildId: null });
+        note("dmOpen=dispatch");
+      }
+    } catch (err) {
+      note("dmOpen c " + err);
+    }
+  }
+
+  var STATUS_META = {
+    pinned: { label: "PINNED", color: "#f2f3f5" },
+    online: { label: "ONLINE", color: "#3ba55c" },
+    idle: { label: "IDLE", color: "#faa61a" },
+    dnd: { label: "DO NOT DISTURB", color: "#ed4245" },
+    offline: { label: "OFFLINE", color: "#8b8f98" },
+  };
+
   function Settings() {
+    var useState = React && React.useState;
+    var useEffect = React && React.useEffect;
+    var qState = useState ? useState("") : ["", function () {}];
+    var query = qState[0];
+    var setQuery = qState[1];
+    var tickState = useState ? useState(0) : [0, function () {}];
+    var setTick = tickState[1];
+    var dbgState = useState ? useState(false) : [false, function () {}];
+    var dbg = dbgState[0];
+    var setDbg = dbgState[1];
     try {
       if (useProxy) useProxy(storage);
     } catch (_) {}
+    if (useEffect) {
+      useEffect(function () {
+        var p = PresenceStore();
+        if (!p || typeof p.addChangeListener !== "function") return;
+        var on = function () {
+          setTick(function (n) {
+            return n + 1;
+          });
+        };
+        p.addChangeListener(on);
+        return function () {
+          try {
+            p.removeChangeListener && p.removeChangeListener(on);
+          } catch (_) {}
+        };
+      }, []);
+    }
     if (!e) return null;
+    var rows = listFriends(query);
+    var counts = { online: 0, idle: 0, dnd: 0, offline: 0, pinned: 0 };
+    for (var i = 0; i < rows.length; i++) {
+      var k = rows[i].status;
+      if (counts[k] == null) counts[k] = 0;
+      counts[k]++;
+    }
     var log = (storage._debug && storage._debug.length ? storage._debug : debugLog) || [];
-    return e(
-      ScrollView,
-      { style: styles && styles.page },
-      e(Text, { style: styles && styles.title }, "OnlineNow debug"),
+    var sections = ["pinned", "online", "idle", "dnd", "offline"];
+    var kids = [
+      e(Text, { key: "t", style: styles && styles.title }, "OnlineNow"),
       e(
         Text,
-        { style: styles && styles.hint },
-        (hooks.length ? "Hooks: " + hooks.join(", ") : "No hooks yet.") +
-          "\n\n" +
-          (log.length ? log.join("\n") : "Enable the plugin, wait 3s, reopen this page."),
+        { key: "h", style: styles && styles.hint },
+        counts.online +
+          " online · " +
+          counts.idle +
+          " idle · tap Message to open a DM",
       ),
-      TOGGLES.map(function (row) {
-        return e(
-          View,
-          { key: row[0], style: styles && styles.row },
+    ];
+    if (TextInput) {
+      kids.push(
+        e(TextInput, {
+          key: "s",
+          style: styles && styles.search,
+          placeholder: "Search friends",
+          placeholderTextColor: "#8b8f98",
+          value: query,
+          onChangeText: setQuery,
+        }),
+      );
+    }
+    if (!rows.length) {
+      kids.push(
+        e(
+          Text,
+          { key: "empty", style: styles && styles.hint },
+          "No friends loaded yet. Enable the plugin, wait a few seconds, reopen this page.",
+        ),
+      );
+    }
+    var lastSec = "";
+    for (var r = 0; r < rows.length; r++) {
+      var row = rows[r];
+      var sec = row.status;
+      if (sections.indexOf(sec) < 0) sec = "offline";
+      if (sec !== lastSec) {
+        lastSec = sec;
+        var meta = STATUS_META[sec] || STATUS_META.offline;
+        kids.push(
+          e(
+            Text,
+            { key: "sec-" + sec, style: [styles && styles.section, { color: meta.color }] },
+            meta.label + " · " + (counts[sec] || 0),
+          ),
+        );
+      }
+      (function (item) {
+        var av = userAvatar(item.id);
+        var initial = (item.name || "?").slice(0, 1).toUpperCase();
+        kids.push(
           e(
             View,
-            { style: { flex: 1, paddingRight: 12 } },
-            e(Text, { style: styles && styles.label }, row[1]),
-            e(Text, { style: styles && styles.sub }, row[2]),
+            { key: item.id, style: styles && styles.friend },
+            av && Image
+              ? e(Image, { source: { uri: av }, style: styles && styles.avatar })
+              : e(View, { style: styles && styles.avatar }, e(Text, { style: styles && styles.avatarText }, initial)),
+            e(
+              Pressable,
+              {
+                onPress: function () {
+                  togglePin(item.id);
+                },
+                style: { flex: 1, paddingRight: 8 },
+              },
+              e(Text, { style: styles && styles.name, numberOfLines: 1 }, item.name),
+              e(Text, { style: styles && styles.sub }, item.status === "pinned" ? "pinned · tap to unpin" : "tap name to pin"),
+            ),
+            e(
+              Pressable,
+              {
+                onPress: function () {
+                  openDM(item.id);
+                },
+                style: styles && styles.msg,
+              },
+              e(Text, { style: styles && styles.msgText }, "Message"),
+            ),
           ),
-          e(Switch, {
-            value: !!storage[row[0]],
-            onChange: function (v) {
-              storage[row[0]] = v;
-            },
-          }),
         );
-      }),
+      })(row);
+    }
+    kids.push(e(Text, { key: "opt", style: [styles && styles.section, { color: "#8b8f98" }] }, "OPTIONS"));
+    for (var t = 0; t < TOGGLES.length; t++) {
+      (function (tog) {
+        kids.push(
+          e(
+            View,
+            { key: tog[0], style: styles && styles.row },
+            e(
+              View,
+              { style: { flex: 1, paddingRight: 12 } },
+              e(Text, { style: styles && styles.label }, tog[1]),
+              e(Text, { style: styles && styles.sub }, tog[2]),
+            ),
+            e(Switch, {
+              value: !!storage[tog[0]],
+              onChange: function (v) {
+                storage[tog[0]] = v;
+              },
+            }),
+          ),
+        );
+      })(TOGGLES[t]);
+    }
+    kids.push(
+      e(
+        Pressable,
+        {
+          key: "dbg",
+          onPress: function () {
+            setDbg(!dbg);
+          },
+        },
+        e(Text, { style: styles && styles.debugBtn }, dbg ? "Hide plugin debug" : "Plugin debug"),
+      ),
     );
+    if (dbg) {
+      kids.push(
+        e(
+          Text,
+          { key: "log", style: styles && styles.hint, selectable: true },
+          (hooks.length ? "Hooks: " + hooks.join(", ") : "No hooks yet.") +
+            "\n\n" +
+            (log.length ? log.join("\n") : "Enable, wait 3s, reopen."),
+        ),
+      );
+    }
+    return e(ScrollView, { style: styles && styles.page, contentContainerStyle: styles && styles.pad }, kids);
   }
 
   function patchVisibleBadge() {
@@ -984,6 +1267,70 @@
       }
     } catch (err) {
       note("badge err " + err);
+    }
+  }
+
+  function openOnlineNowPage() {
+    var params = { title: "OnlineNow", render: Settings };
+    var routes = ["SHIGGYCORD_CUSTOM_PAGE", "VendettaCustomPage", "BUNNY_CUSTOM_PAGE"];
+    var nav = null;
+    try {
+      var refApi = byProps("getRootNavigationRef");
+      nav = refApi && refApi.getRootNavigationRef && refApi.getRootNavigationRef();
+    } catch (_) {}
+    if (!nav) {
+      try {
+        var NN = common.NavigationNative;
+        if (NN && typeof NN.getNavigationRef === "function") nav = NN.getNavigationRef();
+      } catch (_) {}
+    }
+    if (nav && typeof nav.navigate === "function") {
+      for (var i = 0; i < routes.length; i++) {
+        try {
+          nav.navigate(routes[i], params);
+          note("page=" + routes[i]);
+          return;
+        } catch (err) {
+          note("nav " + routes[i] + " " + err);
+        }
+      }
+    }
+    toast("Open Plugins → OnlineNow → gear");
+  }
+
+  function registerOnlineNowSection() {
+    var register = null;
+    try {
+      if (bunnyApi && bunnyApi.ui && bunnyApi.ui.settings && bunnyApi.ui.settings.registerSection) {
+        register = bunnyApi.ui.settings.registerSection;
+      }
+    } catch (_) {}
+    if (!register) {
+      var mod = byProps("registerSection", "registeredSections");
+      register = mod && mod.registerSection;
+    }
+    if (!register) {
+      note("registerSection=no");
+      return;
+    }
+    try {
+      var undo = register({
+        name: "OnlineNow",
+        items: [
+          {
+            key: "onlinenow-page",
+            title: function () {
+              return "OnlineNow";
+            },
+            onPress: openOnlineNowPage,
+          },
+        ],
+      });
+      if (typeof undo === "function") unpatches.push(undo);
+      hooks.push("settingsRow");
+      note("registerSection=ok");
+    } catch (err) {
+      note("registerSection err " + err);
     }
   }
 
@@ -1037,18 +1384,22 @@
   function onlineHeader() {
     if (!e || !Text) return null;
     return e(
-      Text,
-      {
-        style: {
-          color: "#3ba55c",
-          paddingHorizontal: 16,
-          paddingTop: 10,
-          paddingBottom: 6,
-          fontWeight: "700",
-          fontSize: 13,
+      Pressable,
+      { onPress: openOnlineNowPage },
+      e(
+        Text,
+        {
+          style: {
+            color: "#3ba55c",
+            paddingHorizontal: 16,
+            paddingTop: 10,
+            paddingBottom: 6,
+            fontWeight: "700",
+            fontSize: 13,
+          },
         },
-      },
-      "OnlineNow · online people first",
+        "OnlineNow · tap for online first",
+      ),
     );
   }
 
@@ -1138,6 +1489,21 @@
     }
   }
 
+  function sortUserListProps(props) {
+    if (!props || !storage.friendsGrouping) return null;
+    var keys = ["users", "data", "items", "rows", "userIds"];
+    var next = null;
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (!props[k]) continue;
+      var arr = asArray(props[k]);
+      if (arr.length < 2) continue;
+      if (!next) next = {};
+      next[k] = sortUnknown(arr);
+    }
+    return next;
+  }
+
   function restyleTitle(el) {
     if (!el || !el.props || !React || !React.cloneElement) return el;
     var kids = el.props.children;
@@ -1180,34 +1546,27 @@
         if (looksList) {
           if (!jsxSeen["impl:" + cname]) {
             jsxSeen["impl:" + cname] = 1;
-            note("messagesImpl=jsx:" + (cname || "anonList"));
-          }
-          var forced = sortedProps(ret.props);
-          if (!forced) {
-            var raw = ret.props.data || ret.props.items || ret.props.rows;
-            if (raw && asArray(raw).length > 1) {
-              forced = Object.assign({}, ret.props, {
-                data: ret.props.data ? sortUnknown(ret.props.data) : ret.props.data,
-                items: ret.props.items ? sortUnknown(ret.props.items) : ret.props.items,
-                extraData: "onlinenow-" + presenceGen,
-                ListHeaderComponent: ret.props.ListHeaderComponent || onlineHeader,
-              });
-            }
-          }
-          if (forced && React.cloneElement) {
-            note("jsx list " + (cname || "anon"));
-            return React.cloneElement(ret, forced);
+            note("messagesImpl=jsx:" + (cname || "anonList") + " (no wrap — FastestList crash)");
           }
         }
-        var titled = restyleTitle(ret);
+        if (
+          storage.patchDiscordLists &&
+          (cname === "SearchableUserList" || cname === "UsersFastListInner")
+        ) {
+          var userSorted = sortUserListProps(ret.props);
+          if (userSorted && React.cloneElement) {
+            if (!jsxSeen["sort:" + cname]) {
+              jsxSeen["sort:" + cname] = 1;
+              note("jsx sort " + cname);
+              hooks.push("jsx:" + cname);
+            }
+            return React.cloneElement(ret, userSorted);
+          }
+        }
+        var titled = storage.patchDiscordLists ? restyleTitle(ret) : ret;
         if (titled !== ret) {
           note("jsx title");
           return titled;
-        }
-        var listed = restyleList(ret);
-        if (listed !== ret) {
-          note("jsx list");
-          return listed;
         }
       } catch (err) {
         note("jsx wrap " + err);
@@ -1309,22 +1668,7 @@
   }
 
   function patchListModules() {
-    var names = ["FastestList", "FastList", "FlashList", "FlatList", "SectionList", "VirtualizedList", "LegendList", "RecyclerListView"];
-    var hit = false;
-    for (var i = 0; i < names.length; i++) {
-      var C = ctorOf(findNamedList(names[i]));
-      if (wrapListRender(C, names[i])) hit = true;
-    }
-    if (!hit) {
-      var already = false;
-      for (var j = 0; j < hooks.length; j++) {
-        if (String(hooks[j]).indexOf("list:") === 0) already = true;
-      }
-      if (!already) {
-        scanListNames();
-        note("messagesImpl=unknown");
-      }
-    }
+    note("messagesImpl=FastestList (FriendsScreen/UsersFastListInner) — wrap disabled, use OnlineNow page");
   }
 
   function onLoad() {
@@ -1347,6 +1691,7 @@
       patchVisibleBadge();
       patchJsxLists();
       patchListModules();
+      registerOnlineNowSection();
     } catch (err) {
       note("onLoad err " + err);
       console.error("[OnlineNow]", err);
@@ -1385,7 +1730,7 @@
       note("PresenceStore=" + !!(pre && pre.getStatus) + " " + fnNames(pre));
       note("ChannelStore=" + !!(ch && ch.getChannel) + " " + fnNames(ch));
       note("PrivateChannelSortStore " + fnNames(byStore("PrivateChannelSortStore")));
-      toast(hooks.length ? "OnlineNow on · " + hooks.length + " hooks" : "OnlineNow on · 0 hooks — open plugin settings");
+      toast("OnlineNow page ready · Plugins → OnlineNow → gear");
     }, 2500);
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "OnlineNow",
-  "description": "ShiggyCord: online friends at the top of Messages and Friends.",
+  "description": "ShiggyCord OnlineNow page \u2014 online friends first. Discord lists off by default (no FastestList crash).",
   "authors": [
     {
       "name": "OnlineNow",
@@ -8,7 +8,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "37732af1932197ec95491e359057c07526664c277187625d416cdd585480819a",
+  "hash": "81677ef910a871cdfaa0ac43567cb672c86f2f8b85c94d1e5bfc44f1bf3595bd",
   "vendetta": {
     "icon": "ic_person_24px"
   }
