@@ -116,6 +116,8 @@
   var hookedPairs = [];
   var inFriend = false;
   var inDm = false;
+  var presenceGen = 0;
+  var presenceTimer = null;
 
   function toast(msg) {
     try {
@@ -254,6 +256,26 @@
     return (storage.pinnedIds || []).indexOf(String(id)) !== -1;
   }
 
+  function isPinnedChannel(id) {
+    if (isPinned(id)) return true;
+    try {
+      var cs = ChannelStore();
+      var ch = cs && cs.getChannel && cs.getChannel(String(id));
+      if (ch && (ch.isPinned || ch.pinned || ch.is_pinned)) return true;
+    } catch (_) {}
+    try {
+      var pin = byProps("isPrivateChannelPinned") || byProps("getPinnedPrivateChannelIds");
+      if (pin && typeof pin.isPrivateChannelPinned === "function" && pin.isPrivateChannelPinned(String(id))) {
+        return true;
+      }
+      if (pin && typeof pin.getPinnedPrivateChannelIds === "function") {
+        var pins = pin.getPinnedPrivateChannelIds();
+        if (pins && pins.indexOf && pins.indexOf(String(id)) >= 0) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
   function togglePin(id) {
     id = String(id);
     var cur = (storage.pinnedIds || []).slice();
@@ -308,7 +330,12 @@
     ids = asArray(ids);
     if (!ids.length || !storage.dmOnlineFirst) return ids;
     return ids.slice().sort(function (a, b) {
-      return rankChannel(a) - rankChannel(b);
+      var pa = isPinnedChannel(a) ? 0 : 1;
+      var pb = isPinnedChannel(b) ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      var ra = rankChannel(a) - rankChannel(b);
+      if (ra !== 0) return ra;
+      return 0;
     });
   }
 
@@ -642,7 +669,11 @@
     var p = PresenceStore();
     if (!p || typeof p.addChangeListener !== "function") return;
     var onChange = function () {
-      bumpLists();
+      if (presenceTimer) clearTimeout(presenceTimer);
+      presenceTimer = setTimeout(function () {
+        presenceGen++;
+        bumpLists();
+      }, 200);
     };
     p.addChangeListener(onChange);
     unpatches.push(function () {
@@ -1046,8 +1077,53 @@
       }
       set("sections", secs);
     }
+    if (typeof props.getItem === "function" && typeof props.getItemCount === "function") {
+      try {
+        var n = props.getItemCount(props.data);
+        if (typeof n !== "number") n = props.getItemCount();
+        var bag = [];
+        if (typeof n === "number" && n > 1 && n < 2000) {
+          for (var gi = 0; gi < n; gi++) {
+            var it = null;
+            try {
+              it = props.getItem(props.data, gi);
+            } catch (_) {
+              try {
+                it = props.getItem(gi);
+              } catch (_) {}
+            }
+            bag.push(it);
+          }
+          if (isPrivateData(bag) || (bag.length > 2 && rankChannel(bag[0]) <= 3)) {
+            var sortedBag = sortUnknown(bag);
+            set("getItemCount", function () {
+              return sortedBag.length;
+            });
+            set("getItem", function (_d, i) {
+              if (typeof i !== "number") i = _d;
+              return sortedBag[i];
+            });
+          }
+        }
+      } catch (_) {}
+    }
     if (next && !props.ListHeaderComponent) next.ListHeaderComponent = onlineHeader;
-    if (next) next.extraData = "onlinenow";
+    if (next) next.extraData = "onlinenow-" + presenceGen;
+    if (next && typeof props.renderItem === "function") {
+      var origRI = props.renderItem;
+      next.renderItem = function (info) {
+        var row = origRI(info);
+        if (!row || !e || !View) return row;
+        var item = info && (info.item != null ? info.item : info);
+        var id = item && (item.id || item.channel_id || item.channelId || item.userId || item);
+        var r = 3;
+        try {
+          r = rankChannel(id);
+        } catch (_) {}
+        var color = r === 0 ? "#3ba55c" : r === 1 ? "#faa61a" : r === 2 ? "#ed4245" : "#4f545c";
+        return e(View, { style: { borderLeftWidth: 3, borderLeftColor: color } }, row);
+      };
+    }
     return next;
   }
 
@@ -1078,10 +1154,51 @@
   function patchJsxLists() {
     var jsx = byProps("jsx", "jsxs");
     var inJsx = false;
-    function wrap(_args, ret) {
+    var jsxSeen = {};
+    var jsxLogged = 0;
+    function wrap(args, ret) {
       if (inJsx || !ret || !ret.props) return ret;
       inJsx = true;
       try {
+        var Comp = args && args[0];
+        var cname =
+          typeof Comp === "string"
+            ? Comp
+            : (Comp && (Comp.displayName || Comp.name)) || "";
+        var looksList =
+          /FastestList|FastList|FlashList|VirtualizedList|Recycler|DCD.*List|ChannelList/i.test(cname) ||
+          (ret.props && (ret.props.estimatedItemSize != null || ret.props.estimatedFirstItemOffset != null));
+        if (jsxLogged < 24 && ret.props && (ret.props.data || ret.props.items || ret.props.getItem || looksList)) {
+          var tag = cname || "?";
+          if (!jsxSeen[tag]) {
+            jsxSeen[tag] = 1;
+            jsxLogged++;
+            var n = asArray(ret.props.data || ret.props.items || ret.props.rows).length;
+            note("jsxComp=" + tag + (typeof Comp === "string" ? " native" : "") + " n=" + n + (looksList ? " list" : ""));
+          }
+        }
+        if (looksList) {
+          if (!jsxSeen["impl:" + cname]) {
+            jsxSeen["impl:" + cname] = 1;
+            note("messagesImpl=jsx:" + (cname || "anonList"));
+          }
+          var forced = sortedProps(ret.props);
+          if (!forced) {
+            var raw = ret.props.data || ret.props.items || ret.props.rows;
+            if (raw && asArray(raw).length > 1) {
+              forced = Object.assign({}, ret.props, {
+                data: ret.props.data ? sortUnknown(ret.props.data) : ret.props.data,
+                items: ret.props.items ? sortUnknown(ret.props.items) : ret.props.items,
+                extraData: "onlinenow-" + presenceGen,
+                ListHeaderComponent: ret.props.ListHeaderComponent || onlineHeader,
+              });
+            }
+          }
+          if (forced && React.cloneElement) {
+            note("jsx list " + (cname || "anon"));
+            return React.cloneElement(ret, forced);
+          }
+        }
         var titled = restyleTitle(ret);
         if (titled !== ret) {
           note("jsx title");
@@ -1107,46 +1224,105 @@
     }
   }
 
+  function findNamedList(name) {
+    var m = null;
+    try {
+      if (findByName) m = findByName(name);
+    } catch (_) {}
+    if (m) return m;
+    try {
+      if (findByDisplayName) m = findByDisplayName(name);
+    } catch (_) {}
+    if (m) return m;
+    try {
+      m = byProps(name);
+      if (m && m[name]) return m[name];
+      if (m) return m;
+    } catch (_) {}
+    return null;
+  }
+
+  function ctorOf(mod) {
+    if (!mod) return null;
+    if (typeof mod === "function") return mod;
+    if (typeof mod.default === "function") return mod.default;
+    if (mod.type && typeof mod.type === "function") return mod.type;
+    return null;
+  }
+
+  function wrapListRender(C, name) {
+    if (!C || !instead) return false;
+    var proto = C.prototype;
+    if (!proto || typeof proto.render !== "function") return false;
+    for (var h = 0; h < hookedPairs.length; h++) {
+      if (hookedPairs[h][0] === proto && hookedPairs[h][1] === "render") return false;
+    }
+    hookedPairs.push([proto, "render"]);
+    try {
+      unpatches.push(
+        instead("render", proto, function (args, orig) {
+          try {
+            var self = this;
+            var next = self && sortedProps(self.props);
+            if (!next) return orig.apply(self, args);
+            var prev = self.props;
+            self.props = Object.assign({}, prev, next);
+            try {
+              return orig.apply(self, args);
+            } finally {
+              self.props = prev;
+            }
+          } catch (err) {
+            note("render fail " + name + " " + err);
+            return orig.apply(this, args);
+          }
+        }),
+      );
+      hooks.push("list:" + name);
+      note("messagesImpl=" + name);
+      return true;
+    } catch (err) {
+      note("list fail " + name + " " + err);
+      return false;
+    }
+  }
+
+  function scanListNames() {
+    var names = [];
+    try {
+      if (typeof metro.findAll !== "function") return;
+      var all = metro.findAll(function (m) {
+        if (!m) return false;
+        var n = m.displayName || m.name || (m.default && (m.default.displayName || m.default.name));
+        return typeof n === "string" && /List|Fastest|FastList|FlashList|Recycler/.test(n);
+      });
+      if (!all) return;
+      for (var i = 0; i < Math.min(all.length, 24); i++) {
+        var m = all[i];
+        var n = m.displayName || m.name || (m.default && (m.default.displayName || m.default.name)) || "?";
+        names.push(n);
+      }
+      if (names.length) note("listNames=" + names.join(","));
+    } catch (err) {
+      note("listNames err " + err);
+    }
+  }
+
   function patchListModules() {
-    var specs = [
-      ["FlashList"],
-      ["FlatList"],
-      ["SectionList"],
-      ["VirtualizedList"],
-      ["LegendList"],
-      ["RecyclerListView"],
-      ["FastList"],
-    ];
-    for (var i = 0; i < specs.length; i++) {
-      var name = specs[i][0];
-      var mod = byProps(name);
-      var C = mod && (mod[name] || mod.default);
-      if (!C) continue;
-      var proto = C.prototype;
-      if (proto && typeof proto.render === "function") {
-        if (!instead) continue;
-        try {
-          if (hookedPairs.some(function (p) { return p[0] === proto && p[1] === "render"; })) continue;
-          hookedPairs.push([proto, "render"]);
-          unpatches.push(
-            instead("render", proto, function (args, orig) {
-              var self = this;
-              var next = self && sortedProps(self.props);
-              if (!next) return orig.apply(self, args);
-              var prev = self.props;
-              self.props = Object.assign({}, prev, next);
-              try {
-                return orig.apply(self, args);
-              } finally {
-                self.props = prev;
-              }
-            }),
-          );
-          hooks.push("list:" + name);
-          note("list:" + name);
-        } catch (err) {
-          note("list fail " + name + " " + err);
-        }
+    var names = ["FastestList", "FastList", "FlashList", "FlatList", "SectionList", "VirtualizedList", "LegendList", "RecyclerListView"];
+    var hit = false;
+    for (var i = 0; i < names.length; i++) {
+      var C = ctorOf(findNamedList(names[i]));
+      if (wrapListRender(C, names[i])) hit = true;
+    }
+    if (!hit) {
+      var already = false;
+      for (var j = 0; j < hooks.length; j++) {
+        if (String(hooks[j]).indexOf("list:") === 0) already = true;
+      }
+      if (!already) {
+        scanListNames();
+        note("messagesImpl=unknown");
       }
     }
   }
@@ -1192,6 +1368,11 @@
     );
     setTimeout(function () {
       try {
+        patchListModules();
+      } catch (_) {}
+    }, 1000);
+    setTimeout(function () {
+      try {
         patchStrip();
         patchFriendHeaders();
         patchJsxLists();
@@ -1209,6 +1390,12 @@
   }
 
   function onUnload() {
+    if (presenceTimer) {
+      try {
+        clearTimeout(presenceTimer);
+      } catch (_) {}
+      presenceTimer = null;
+    }
     while (unpatches.length) {
       try {
         unpatches.pop()();
