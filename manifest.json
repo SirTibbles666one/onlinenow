@@ -1,6 +1,6 @@
 {
   "name": "OnlineNow",
-  "description": "Puts online friends at the top of Messages and groups Friends by status.",
+  "description": "Classic Revenge 1.11 / Discord 342: online friends at the top of Messages and Friends.",
   "authors": [
     {
       "name": "OnlineNow",
@@ -8,7 +8,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "abbe634eae450ce592441f5b925541b306b2af6e06904d16a281c838b73e9161",
+  "hash": "5173a9480d9f55aa067b733658bc98d83e76bf43e58423f4980371a9751a2202",
   "vendetta": {
     "icon": "ic_person_24px"
   }
