@@ -1,38 +1,30 @@
 # OnlineNow
 
-Classic Revenge / Vendetta / Bunny plugin. Groups friends by online status and puts people who are actually around at the top of Chat.
+Classic Revenge / Vendetta / Bunny plugin. Puts people who are actually around at the top of **Messages**, and groups **Friends** by status.
 
-## Install
+## Install / update
 
-In Discord with Revenge loaded:
-
-1. Settings → Revenge → Plugins → **+**
-2. Paste **this folder URL** (not this GitHub page, not the `.js` file):
-
-```
-https://cdn.jsdelivr.net/gh/SirTibbles666one/onlinenow@main/
-```
-
-Revenge fetches `manifest.json`, then `index.js`.
-
-Fallback:
+Paste **this folder URL** in Revenge (not this GitHub page, not the `.js` file):
 
 ```
 https://raw.githubusercontent.com/SirTibbles666one/onlinenow/main/
 ```
 
-The repo must stay **public**. Private repos cannot be installed.
+If you already installed an older copy: Settings → Revenge → Plugins → OnlineNow → Uninstall, then install again with that URL. Revenge caches the old script until you do.
 
-## What it does
+jsDelivr (can lag after an update):
 
-- Friends ordered: Pinned → Online → Idle → DND → Offline
-- **Online now** strip on Chat — tap an avatar to open a DM
-- Optional online-first DM sort (off by default)
-- Settings inside the plugin
+```
+https://cdn.jsdelivr.net/gh/SirTibbles666one/onlinenow@main/
+```
 
-Reads local presence and friends stores only. It never sends messages on its own.
+Repo must stay **public**.
+
+## How you know it loaded
+
+A toast: **OnlineNow on · N hooks**. Messages should list green/online people above idle and offline. Friends All tab is Online → Idle → DND → Offline.
 
 ## Files
 
-- `manifest.json` — plugin manifest
-- `index.js` — plugin
+- `manifest.json`
+- `index.js`

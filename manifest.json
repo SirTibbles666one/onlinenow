@@ -1,6 +1,6 @@
 {
   "name": "OnlineNow",
-  "description": "Group friends by online status and put people who are actually around at the top of Chat.",
+  "description": "Puts online friends at the top of Messages and groups Friends by status.",
   "authors": [
     {
       "name": "OnlineNow",
@@ -8,7 +8,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "acfc00f8bd0c54f594f200a4c683b6a85bbea67c76142b662da4f25554db4deb",
+  "hash": "abbe634eae450ce592441f5b925541b306b2af6e06904d16a281c838b73e9161",
   "vendetta": {
     "icon": "ic_person_24px"
   }
