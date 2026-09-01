@@ -1,6 +1,6 @@
 {
   "name": "OnlineNow",
-  "description": "Classic Revenge 1.11 / Discord 342: online friends at the top of Messages and Friends.",
+  "description": "ShiggyCord: online friends at the top of Messages and Friends.",
   "authors": [
     {
       "name": "OnlineNow",
@@ -8,7 +8,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "fd76816f33163d26a3716cdbedc76ee21cded5551f9b55b7e036cb65d12253fd",
+  "hash": "d4cc54219fde1059c749d51d6f95341ad6e95ea357a259da7e547a572c5135a6",
   "vendetta": {
     "icon": "ic_person_24px"
   }

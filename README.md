@@ -1,25 +1,21 @@
-# OnlineNow
+# OnlineNow for ShiggyCord
 
-Classic Revenge plugin for **Revenge 1.11.x** (`1b1d297-main`) + Discord **342**.
-
-Puts people who are actually around at the top of **Messages** and **Friends**.
+Classic Vendetta plugin for **ShiggyCord** (Kettu). Puts people who are around at the top of **Messages** and **Friends**.
 
 ## Install
 
-1. Settings → Revenge → Plugins
-2. Uninstall OnlineNow if it is already there (old copies stay cached)
-3. Tap **+** and paste the **folder** URL (not this page, not `index.js`):
+1. Settings → Plugins
+2. Uninstall OnlineNow if it is already there
+3. Tap **+** and paste the **folder** URL (trailing slash):
 
 ```
 https://raw.githubusercontent.com/SirTibbles666one/onlinenow/main/
 ```
 
-Or the preview URL ending in `/plugin/`.
+4. Enable it
+5. Reload Discord
+6. Open Messages — online people should sit at the top
 
-4. Enable it. You must see a toast: **OnlineNow on · N hooks**
-5. **Reload Discord** (Settings → Revenge → Reload Discord)
-6. Open Messages. Online people should sit above idle and offline.
+If the plugin never appears, Settings → General → Developer Settings → Evaluate JavaScript → paste `eval.js` from this folder.
 
-If the toast says **0 hooks**, open the plugin settings and screenshot the “Hooks” line.
-
-Repo must stay **public**. Files at the **root**: `manifest.json`, `index.js`.
+Repo must stay **public**. Root files: `manifest.json`, `index.js`.

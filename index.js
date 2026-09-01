@@ -1,15 +1,12 @@
-/**
- * OnlineNow — Classic Revenge 1.11 / Discord 342
- *
- * Vendetta: module.exports = { onLoad, onUnload, settings }
- * Bunny:    var plugin = ... ; return plugin?.default ?? plugin
- */
-var plugin = (function (root, bunnyApi) {
+(plugin = (function () {
   "use strict";
+
+  var root = typeof globalThis !== "undefined" ? globalThis : this;
+  var bunnyApi = typeof bunny !== "undefined" ? bunny : null;
 
   function vdRequire(id) {
     var vd =
-      (typeof globalThis !== "undefined" && globalThis.vendetta) ||
+      (typeof vendetta !== "undefined" && vendetta) ||
       (root && root.vendetta) ||
       {};
     try {
@@ -90,6 +87,9 @@ var plugin = (function (root, bunnyApi) {
   function note(msg) {
     debugLog.push(String(msg));
     try {
+      storage._debug = debugLog.slice(-40);
+    } catch (_) {}
+    try {
       console.log("[OnlineNow]", msg);
     } catch (_) {}
   }
@@ -165,13 +165,33 @@ var plugin = (function (root, bunnyApi) {
     return null;
   }
 
+  function findFn() {
+    var props = [].slice.call(arguments);
+    var m = byProps.apply(null, props);
+    if (m) return m;
+    try {
+      if (typeof metro.find === "function") {
+        return metro.find(function (mod) {
+          if (!mod) return false;
+          for (var i = 0; i < props.length; i++) {
+            if (typeof mod[props[i]] !== "function" && mod[props[i]] === undefined) return false;
+          }
+          return true;
+        });
+      }
+    } catch (err) {
+      note("findFn " + props.join(",") + " " + err);
+    }
+    return null;
+  }
+
   function PresenceStore() {
     return pick(function () {
       return byStore("PresenceStore");
     }, function () {
-      return byProps("getStatus", "getActivities");
+      return findFn("getStatus", "getActivities");
     }, function () {
-      return byProps("getStatus");
+      return findFn("getStatus", "isMobileOnline");
     });
   }
 
@@ -179,9 +199,11 @@ var plugin = (function (root, bunnyApi) {
     return pick(function () {
       return byStore("RelationshipStore");
     }, function () {
-      return byProps("getFriendIDs", "isFriend");
+      return findFn("getFriendIDs", "isFriend");
     }, function () {
-      return byProps("getFriendIDs");
+      return findFn("getFriendIDs");
+    }, function () {
+      return findFn("getFriendIds");
     });
   }
 
@@ -189,10 +211,22 @@ var plugin = (function (root, bunnyApi) {
     return pick(function () {
       return byStore("ChannelStore");
     }, function () {
-      return byProps("getChannel", "getDMFromUserId");
+      return findFn("getChannel", "getDMFromUserId");
     }, function () {
-      return byProps("getChannel");
+      return findFn("getDMFromUserId");
     });
+  }
+
+  function asArray(x) {
+    if (!x) return [];
+    if (Array.isArray(x)) return x;
+    try {
+      if (typeof x.toArray === "function") return x.toArray();
+    } catch (_) {}
+    try {
+      if (typeof x.length === "number") return Array.prototype.slice.call(x);
+    } catch (_) {}
+    return [];
   }
 
   function statusOf(id) {
@@ -230,7 +264,8 @@ var plugin = (function (root, bunnyApi) {
   }
 
   function orderFriendIds(ids) {
-    if (!Array.isArray(ids) || !storage.friendsGrouping) return ids;
+    ids = asArray(ids);
+    if (!ids.length || !storage.friendsGrouping) return ids;
     var copy = ids.slice();
     copy.sort(function (a, b) {
       var pa = isPinned(a) ? 0 : 1;
@@ -270,7 +305,8 @@ var plugin = (function (root, bunnyApi) {
   }
 
   function sortIds(ids) {
-    if (!Array.isArray(ids) || !storage.dmOnlineFirst) return ids;
+    ids = asArray(ids);
+    if (!ids.length || !storage.dmOnlineFirst) return ids;
     return ids.slice().sort(function (a, b) {
       return rankChannel(a) - rankChannel(b);
     });
@@ -312,11 +348,13 @@ var plugin = (function (root, bunnyApi) {
         return res;
       }
       if (next === undefined) return res;
-      if (Array.isArray(res) && Array.isArray(next) && res !== next) {
-        res.length = 0;
-        for (var i = 0; i < next.length; i++) res.push(next[i]);
-        return res;
-      }
+      try {
+        if (Array.isArray(res) && Array.isArray(next) && res !== next && !Object.isFrozen(res)) {
+          res.length = 0;
+          for (var i = 0; i < next.length; i++) res.push(next[i]);
+          return res;
+        }
+      } catch (_) {}
       return next;
     }
     try {
@@ -361,7 +399,18 @@ var plugin = (function (root, bunnyApi) {
   function patchFriends() {
     var store = RelationshipStore();
     hookAll(store, "getFriendIDs", function (_a, ids) {
-      if (inFriend || !Array.isArray(ids)) return ids;
+      if (inFriend) return ids;
+      inFriend = true;
+      try {
+        return orderFriendIds(ids);
+      } catch (_) {
+        return ids;
+      } finally {
+        inFriend = false;
+      }
+    });
+    hookAll(store, "getFriendIds", function (_a, ids) {
+      if (inFriend) return ids;
       inFriend = true;
       try {
         return orderFriendIds(ids);
@@ -713,18 +762,21 @@ var plugin = (function (root, bunnyApi) {
   }
 
   function Settings() {
-    if (useProxy) useProxy(storage);
+    try {
+      if (useProxy) useProxy(storage);
+    } catch (_) {}
     if (!e) return null;
+    var log = (storage._debug && storage._debug.length ? storage._debug : debugLog) || [];
     return e(
       ScrollView,
       { style: styles && styles.page },
-      e(Text, { style: styles && styles.title }, "OnlineNow"),
+      e(Text, { style: styles && styles.title }, "OnlineNow debug"),
       e(
         Text,
         { style: styles && styles.hint },
-        (hooks.length ? "Hooks: " + hooks.join(", ") : "No hooks.") +
-          "\n" +
-          (debugLog.length ? debugLog.join("\n") : "No debug yet. Reload Discord."),
+        (hooks.length ? "Hooks: " + hooks.join(", ") : "No hooks yet.") +
+          "\n\n" +
+          (log.length ? log.join("\n") : "Enable the plugin, wait 3s, reopen this page."),
       ),
       TOGGLES.map(function (row) {
         return e(
@@ -745,6 +797,20 @@ var plugin = (function (root, bunnyApi) {
         );
       }),
     );
+  }
+
+  function patchVisibleBadge() {
+    try {
+      var i18n = findFn("getLocale") || byProps("Messages");
+      var dict = i18n && (i18n.Messages || i18n.default);
+      if (dict && dict.MESSAGES && typeof dict.MESSAGES === "string") {
+        dict.MESSAGES = "Messages · OnlineNow";
+        note("badge:i18n.MESSAGES");
+        hooks.push("badge:i18n");
+      }
+    } catch (err) {
+      note("badge err " + err);
+    }
   }
 
   function whenReady(get, cb, label) {
@@ -782,12 +848,14 @@ var plugin = (function (root, bunnyApi) {
     note("findByProps=" + typeof findByProps + " store=" + typeof findByStoreName);
     note("waitFor=" + typeof (metro && metro.waitFor));
     note("react=" + !!React + " rn=" + !!ReactNative);
+    note("metro.find=" + typeof metro.find);
     try {
       patchFriends();
       patchDms();
       watchPresence();
       patchStrip();
       patchFriendHeaders();
+      patchVisibleBadge();
     } catch (err) {
       note("onLoad err " + err);
       console.error("[OnlineNow]", err);
@@ -840,17 +908,4 @@ var plugin = (function (root, bunnyApi) {
     Settings: Settings,
     SettingsComponent: Settings,
   };
-})(typeof globalThis !== "undefined" ? globalThis : this, typeof bunny !== "undefined" ? bunny : null);
-
-if (typeof definePlugin === "function") {
-  try {
-    plugin = definePlugin(plugin);
-  } catch (_) {}
-}
-
-try {
-  if (typeof module === "object" && module && module.exports) {
-    module.exports = plugin;
-    module.exports.default = plugin;
-  }
-} catch (_) {}
+})())
