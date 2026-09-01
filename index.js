@@ -986,10 +986,10 @@
     if (arr.length < 2) return false;
     var ch = ChannelStore();
     var hits = 0;
-    var n = Math.min(arr.length, 10);
+    var n = Math.min(arr.length, 12);
     for (var i = 0; i < n; i++) {
       var item = arr[i];
-      var id = item && (item.id || item.channel_id || item.channelId || item);
+      var id = item && (item.id || item.channel_id || item.channelId || item.userId || item);
       if (id == null || typeof id === "object") continue;
       try {
         var c = ch && ch.getChannel && ch.getChannel(String(id));
@@ -1021,38 +1021,64 @@
     );
   }
 
+  function sortedProps(props) {
+    if (!props) return null;
+    var next = null;
+    function set(k, v) {
+      if (!next) {
+        next = {};
+        for (var p in props) next[p] = props[p];
+      }
+      next[k] = v;
+    }
+    var keys = ["data", "items", "rows", "channels", "records", "list", "previews"];
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (isPrivateData(props[k])) set(k, sortUnknown(props[k]));
+    }
+    if (Array.isArray(props.sections) && props.sections.length) {
+      var secs = [];
+      for (var s = 0; s < props.sections.length; s++) {
+        var sec = props.sections[s];
+        if (sec && sec.data) {
+          secs.push(Object.assign({}, sec, { data: sortUnknown(sec.data) }));
+        } else secs.push(sec);
+      }
+      set("sections", secs);
+    }
+    if (next && !props.ListHeaderComponent) next.ListHeaderComponent = onlineHeader;
+    if (next) next.extraData = "onlinenow";
+    return next;
+  }
+
   function restyleList(el) {
-    if (!el || !el.props || !React) return el;
-    var data = el.props.data;
-    if (!isPrivateData(data)) return el;
-    var sorted = sortUnknown(data);
-    var next = {
-      data: sorted,
-      extraData: "onlinenow-" + (sorted && sorted[0]),
-    };
-    if (!el.props.ListHeaderComponent) next.ListHeaderComponent = onlineHeader;
+    if (!el || !el.props || !React || !React.cloneElement) return el;
+    var next = sortedProps(el.props);
+    if (!next) return el;
     try {
-      if (React.cloneElement) return React.cloneElement(el, next);
-    } catch (_) {}
-    return el;
+      return React.cloneElement(el, next);
+    } catch (_) {
+      return el;
+    }
   }
 
   function restyleTitle(el) {
-    if (!el || !el.props) return el;
+    if (!el || !el.props || !React || !React.cloneElement) return el;
     var kids = el.props.children;
-    if (kids !== "Messages" && kids !== "Friends") return el;
+    var label = el.props.accessibilityLabel;
+    var text = typeof kids === "string" ? kids : typeof label === "string" ? label : "";
+    if (text !== "Messages" && text !== "Friends") return el;
     try {
-      if (React && React.cloneElement) {
-        return React.cloneElement(el, { children: kids + " · OnlineNow" });
-      }
-    } catch (_) {}
-    return el;
+      return React.cloneElement(el, { children: text + " · OnlineNow" });
+    } catch (_) {
+      return el;
+    }
   }
 
   function patchJsxLists() {
     var jsx = byProps("jsx", "jsxs");
     var inJsx = false;
-    function wrap(args, ret) {
+    function wrap(_args, ret) {
       if (inJsx || !ret || !ret.props) return ret;
       inJsx = true;
       try {
@@ -1061,9 +1087,10 @@
           note("jsx title");
           return titled;
         }
-        if (ret.props.data && isPrivateData(ret.props.data)) {
-          note("jsx list n=" + asArray(ret.props.data).length);
-          return restyleList(ret);
+        var listed = restyleList(ret);
+        if (listed !== ret) {
+          note("jsx list");
+          return listed;
         }
       } catch (err) {
         note("jsx wrap " + err);
@@ -1077,6 +1104,50 @@
       hookAll(jsx, "jsxs", wrap);
     } else if (React && typeof React.createElement === "function") {
       hookAll(React, "createElement", wrap);
+    }
+  }
+
+  function patchListModules() {
+    var specs = [
+      ["FlashList"],
+      ["FlatList"],
+      ["SectionList"],
+      ["VirtualizedList"],
+      ["LegendList"],
+      ["RecyclerListView"],
+      ["FastList"],
+    ];
+    for (var i = 0; i < specs.length; i++) {
+      var name = specs[i][0];
+      var mod = byProps(name);
+      var C = mod && (mod[name] || mod.default);
+      if (!C) continue;
+      var proto = C.prototype;
+      if (proto && typeof proto.render === "function") {
+        if (!instead) continue;
+        try {
+          if (hookedPairs.some(function (p) { return p[0] === proto && p[1] === "render"; })) continue;
+          hookedPairs.push([proto, "render"]);
+          unpatches.push(
+            instead("render", proto, function (args, orig) {
+              var self = this;
+              var next = self && sortedProps(self.props);
+              if (!next) return orig.apply(self, args);
+              var prev = self.props;
+              self.props = Object.assign({}, prev, next);
+              try {
+                return orig.apply(self, args);
+              } finally {
+                self.props = prev;
+              }
+            }),
+          );
+          hooks.push("list:" + name);
+          note("list:" + name);
+        } catch (err) {
+          note("list fail " + name + " " + err);
+        }
+      }
     }
   }
 
@@ -1099,6 +1170,7 @@
       patchFriendHeaders();
       patchVisibleBadge();
       patchJsxLists();
+      patchListModules();
     } catch (err) {
       note("onLoad err " + err);
       console.error("[OnlineNow]", err);
@@ -1123,6 +1195,7 @@
         patchStrip();
         patchFriendHeaders();
         patchJsxLists();
+        patchListModules();
       } catch (_) {}
       var rel = RelationshipStore();
       var pre = PresenceStore();
