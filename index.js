@@ -1,19 +1,10 @@
 /**
- * OnlineNow — Classic Revenge 1.11.x (1b1d297) / Discord 342
+ * OnlineNow — Classic Revenge 1.11.x (Bunny loader) / Discord 342
  *
- * Folder install URL, not this file:
- *   …/plugin/   or   https://raw.githubusercontent.com/SirTibbles666one/onlinenow/main/
+ * Bunny eval: (bunny,definePlugin)=>{ THIS_FILE; return plugin?.default ?? plugin; }
+ * So `plugin` MUST be a top-level binding, not hidden inside an IIFE.
  */
-(function (root, factory) {
-  var plugin = factory(root);
-  if (typeof module === "object" && module.exports) {
-    module.exports = plugin;
-    module.exports.default = function () {
-      return plugin;
-    };
-  }
-  return plugin;
-})(typeof globalThis !== "undefined" ? globalThis : this, function (root) {
+var plugin = (function (root, bunnyApi) {
   "use strict";
 
   function vdRequire(id) {
@@ -27,6 +18,18 @@
       (root && root.vendetta) ||
       (typeof globalThis !== "undefined" && globalThis.vendetta) ||
       {};
+    if (bunnyApi) {
+      if (id === "@vendetta/metro") return bunnyApi.metro || vendetta.metro;
+      if (id === "@vendetta/metro/common")
+        return (bunnyApi.metro && bunnyApi.metro.common) || (vendetta.metro && vendetta.metro.common);
+      if (id === "@vendetta/patcher") return bunnyApi.patcher || vendetta.patcher;
+      if (id === "@vendetta/plugin") return bunnyApi.plugin || vendetta.plugin;
+      if (id === "@vendetta/storage") return bunnyApi.storage || vendetta.storage;
+      if (id === "@vendetta/ui/toasts")
+        return (bunnyApi.ui && bunnyApi.ui.toasts) || (vendetta.ui && vendetta.ui.toasts);
+      if (id === "@vendetta/ui/components")
+        return (bunnyApi.ui && bunnyApi.ui.components) || (vendetta.ui && vendetta.ui.components);
+    }
     var path = String(id)
       .replace(/^@vendetta\/?/, "")
       .split("/")
@@ -84,6 +87,10 @@
   function toast(msg) {
     try {
       if (typeof toasts.showToast === "function") toasts.showToast(msg);
+    } catch (_) {}
+    try {
+      var Alert = ReactNative && ReactNative.Alert;
+      if (Alert && Alert.alert) Alert.alert("OnlineNow", String(msg));
     } catch (_) {}
   }
 
@@ -684,5 +691,17 @@
     start: onLoad,
     stop: onUnload,
     settings: Settings,
+    Settings: Settings,
   };
-});
+})(typeof globalThis !== "undefined" ? globalThis : this, typeof bunny !== "undefined" ? bunny : null);
+
+if (typeof definePlugin === "function") {
+  try {
+    plugin = definePlugin(plugin);
+  } catch (_) {}
+}
+
+if (typeof module === "object" && module.exports) {
+  module.exports = plugin;
+  module.exports.default = plugin;
+}
