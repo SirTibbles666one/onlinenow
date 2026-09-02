@@ -1,16 +1,17 @@
 # OnlineNow for ShiggyCord
 
-Own page of friends grouped **online first**. Tap Message to open a DM.
+Online friends first. Open the **OnlineNow** page (Plugins → gear). **Message** opens that person’s DM.
 
-## Install
+## Install (every update)
 
-1. Settings → Plugins
-2. Uninstall OnlineNow if listed
-3. **+** paste:
+1. Uninstall OnlineNow if it is already listed  
+2. Plugins **+** paste:
 
 ```
 https://raw.githubusercontent.com/SirTibbles666one/onlinenow/main/
 ```
 
-4. Enable → Reshiggy your Discord
-5. Plugins → OnlineNow → **gear** — that is the OnlineNow page
+3. Enable → **Reshiggy**  
+4. Plugins → OnlineNow → **gear**
+
+Leave **Also sort Discord lists** off.

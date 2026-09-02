@@ -103,13 +103,15 @@
     dmOnlineFirst: true,
     dmStrip: true,
     patchDiscordLists: false,
+    showNowTray: true,
   };
 
   for (var k in DEFAULTS) {
     if (storage[k] === undefined) storage[k] = DEFAULTS[k];
   }
-  storage._v = 5;
+  storage._v = 6;
   storage.patchDiscordLists = false;
+  storage.showNowTray = storage.showNowTray !== false;
   storage.dmOnlineFirst = true;
   storage.friendsGrouping = storage.friendsGrouping !== false;
   if (!Array.isArray(storage.pinnedIds)) storage.pinnedIds = [];
@@ -810,36 +812,191 @@
     );
   }
 
-  function patchStrip() {
-    if (!storage.patchDiscordLists) return;
-    var found = findComp([
+  function typeName(el) {
+    if (!el) return "";
+    var t = el.type;
+    if (typeof t === "string") return t;
+    return (t && (t.displayName || t.name)) || "";
+  }
+
+  function isFastestEl(el) {
+    return /FastestList|FastList|FlashList|Recycler/i.test(typeName(el));
+  }
+
+  function collectNowPeople() {
+    var rel = RelationshipStore();
+    var ids = [];
+    try {
+      ids = asArray(rel && rel.getFriendIDs && rel.getFriendIDs());
+    } catch (_) {}
+    var online = [];
+    var idle = [];
+    for (var i = 0; i < ids.length; i++) {
+      var st = statusOf(ids[i]);
+      if (st === "online") online.push({ id: String(ids[i]), name: userName(ids[i]), status: st });
+      else if (st === "idle") idle.push({ id: String(ids[i]), name: userName(ids[i]), status: st });
+    }
+    return online.concat(idle).slice(0, 12);
+  }
+
+  function NowTray() {
+    if (!e || storage.showNowTray === false) return null;
+    var people = [];
+    try {
+      people = collectNowPeople();
+    } catch (_) {
+      return null;
+    }
+    if (!people.length) return null;
+    var ring = { online: "#3ba55c", idle: "#faa61a" };
+    return e(
+      View,
+      {
+        style: {
+          borderBottomWidth: 1,
+          borderBottomColor: "#2a2d33",
+          paddingBottom: 8,
+          backgroundColor: "#1e1f22",
+        },
+      },
+      e(
+        View,
+        {
+          style: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            paddingHorizontal: 16,
+            paddingTop: 10,
+            paddingBottom: 8,
+          },
+        },
+        e(
+          Text,
+          { style: { color: "#3ba55c", fontSize: 11, fontWeight: "700", letterSpacing: 1.2 } },
+          "NOW · " + people.length,
+        ),
+        e(
+          Pressable,
+          {
+            onPress: function () {
+              openOnlineNowPage();
+            },
+            hitSlop: 8,
+          },
+          e(Text, { style: { color: "#8b8f98", fontSize: 13, fontWeight: "600" } }, "See all"),
+        ),
+      ),
+      e(
+        ScrollView,
+        {
+          horizontal: true,
+          showsHorizontalScrollIndicator: false,
+          contentContainerStyle: { paddingHorizontal: 12, flexDirection: "row" },
+        },
+        people.map(function (p) {
+          var initial = (p.name || "?").slice(0, 1).toUpperCase();
+          var color = ring[p.status] || "#3ba55c";
+          return e(
+            Pressable,
+            {
+              key: p.id,
+              onPress: function () {
+                openDM(p.id);
+              },
+              style: { width: 64, alignItems: "center", marginHorizontal: 4 },
+            },
+            e(
+              View,
+              {
+                style: {
+                  width: 48,
+                  height: 48,
+                  borderRadius: 24,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "#2b2d31",
+                  borderWidth: 2,
+                  borderColor: color,
+                },
+              },
+              e(Text, { style: { color: "#f2f3f5", fontWeight: "700", fontSize: 16 } }, initial),
+            ),
+            e(
+              Text,
+              {
+                style: { fontSize: 11, color: "#8b8f98", marginTop: 6, width: 64, textAlign: "center" },
+                numberOfLines: 1,
+              },
+              String(p.name).split(" ")[0],
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  function injectNowTray(ret) {
+    if (!ret || !e || storage.showNowTray === false) return ret;
+    if (isFastestEl(ret)) return ret;
+    if (!React || !React.cloneElement) return ret;
+    try {
+      var tray = e(NowTray, { key: "onlinenow-tray" });
+      if (!tray) return ret;
+      var kids = ret.props && ret.props.children;
+      if (kids == null) {
+        return e(View, { style: { flex: 1 } }, tray, ret);
+      }
+      var arr = Array.isArray(kids) ? kids.slice() : [kids];
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i] && arr[i].key === "onlinenow-tray") return ret;
+      }
+      var at = arr.length;
+      for (var j = 0; j < arr.length; j++) {
+        if (isFastestEl(arr[j])) {
+          at = j;
+          break;
+        }
+      }
+      arr.splice(at, 0, tray);
+      return React.cloneElement(ret, { children: arr });
+    } catch (err) {
+      note("tray inject " + err);
+      return ret;
+    }
+  }
+
+  function patchNowTray() {
+    if (storage.showNowTray === false) return;
+    var names = [
+      "InstantPrivateChannels",
       "ConnectedPrivateChannels",
       "PrivateChannels",
       "PrivateChannelList",
+      "MessagesScreen",
       "Messages",
-      "InstantPrivateChannels",
-    ]);
-    if (!found) return;
-    patchAfterRender(
-      found,
-      function (_args, ret) {
-        if (!storage.dmStrip || !ret) return ret;
-        var strip = e(OnlineStrip, null);
-        if (!strip) return ret;
-        try {
-          if (ret.props && React && React.cloneElement) {
-            var existing = ret.props.ListHeaderComponent;
-            return React.cloneElement(ret, {
-              ListHeaderComponent: function () {
-                return e(View, null, strip, typeof existing === "function" ? e(existing) : existing || null);
-              },
-            });
+    ];
+    var hit = false;
+    for (var i = 0; i < names.length; i++) {
+      var found = findComp([names[i]]);
+      if (!found) continue;
+      hit = true;
+      note("nowHost=" + found.name);
+      patchAfterRender(
+        found,
+        function (_args, ret) {
+          if (!ret) return ret;
+          try {
+            return injectNowTray(ret);
+          } catch (err) {
+            note("now wrap " + err);
+            return ret;
           }
-        } catch (_) {}
-        return e(View, { style: { flex: 1 } }, strip, ret);
-      },
-      "strip",
-    );
+        },
+        "now",
+      );
+    }
+    if (!hit) note("nowHost=none");
   }
 
   function patchFriendHeaders() {
@@ -944,10 +1101,11 @@
     });
 
   var TOGGLES = [
+    ["showNowTray", "Now tray on Messages", "Faces of people who are around, above the list"],
     [
       "patchDiscordLists",
       "Also sort Discord Friends/Messages",
-      "Off = OnlineNow page only (safe). On can crash FastestList.",
+      "Off = safe. On can crash FastestList.",
     ],
     ["friendsGrouping", "Group this page by status", "Pinned, Online, Idle, DND, Offline"],
     ["splitIdle", "Keep Idle separate", "Otherwise Idle counts as online"],
@@ -1026,43 +1184,96 @@
     return rows;
   }
 
-  function openDM(userId) {
-    userId = String(userId);
+  function selectChannel(channelId) {
+    if (channelId == null) return false;
+    if (typeof channelId === "object") channelId = channelId.id || channelId.channelId || channelId.channel_id;
+    channelId = String(channelId);
+    if (!channelId || channelId === "undefined") return false;
     try {
-      var opener = byProps("openPrivateChannel");
-      if (opener && typeof opener.openPrivateChannel === "function") {
-        opener.openPrivateChannel(userId);
-        note("dmOpen=openPrivateChannel");
-        return;
+      var sel = byProps("selectPrivateChannel") || byProps("selectChannel");
+      if (sel && typeof sel.selectPrivateChannel === "function") {
+        sel.selectPrivateChannel(channelId);
+        return true;
       }
-    } catch (err) {
-      note("dmOpen a " + err);
-    }
+      if (sel && typeof sel.selectChannel === "function") {
+        sel.selectChannel({ channelId: channelId, guildId: null });
+        return true;
+      }
+    } catch (_) {}
     try {
-      var cs = ChannelStore();
-      var cid = cs && cs.getDMFromUserId && cs.getDMFromUserId(userId);
-      var jump = byProps("transitionToGuild") || byProps("selectChannel") || byProps("jumpToChannel");
-      if (cid && jump) {
-        if (jump.selectChannel) jump.selectChannel({ channelId: cid, guildId: null });
-        else if (jump.jumpToChannel) jump.jumpToChannel(cid);
-        else if (jump.transitionToGuild) jump.transitionToGuild(null, cid);
-        note("dmOpen=channel " + cid);
-        return;
+      var t = byProps("transitionTo");
+      if (t && typeof t.transitionTo === "function") {
+        t.transitionTo("/channels/@me/" + channelId);
+        return true;
       }
-    } catch (err) {
-      note("dmOpen b " + err);
-    }
+    } catch (_) {}
     try {
       var flux = (common && common.FluxDispatcher) || byProps("dispatch", "subscribe");
-      var cs2 = ChannelStore();
-      var cid2 = cs2 && cs2.getDMFromUserId && cs2.getDMFromUserId(userId);
-      if (flux && flux.dispatch && cid2) {
-        flux.dispatch({ type: "CHANNEL_SELECT", channelId: cid2, guildId: null });
-        note("dmOpen=dispatch");
+      if (flux && typeof flux.dispatch === "function") {
+        flux.dispatch({ type: "CHANNEL_SELECT", channelId: channelId, guildId: null });
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  function openDM(userId) {
+    userId = String(userId);
+    note("dmOpen id=" + userId);
+    try {
+      var cs = ChannelStore();
+      var existing = cs && cs.getDMFromUserId && cs.getDMFromUserId(userId);
+      if (existing && selectChannel(existing)) {
+        note("dmOpen=existing");
+        return;
       }
     } catch (err) {
-      note("dmOpen c " + err);
+      note("dmOpen exist " + err);
     }
+    function afterEnsure(id) {
+      try {
+        if (id && typeof id === "object") id = id.id || id.channelId || id.channel_id;
+        if (id) selectChannel(id);
+      } catch (_) {}
+    }
+    try {
+      var ens = byProps("ensurePrivateChannel") || byProps("getOrCreatePrivateChannel");
+      var efn = ens && (ens.ensurePrivateChannel || ens.getOrCreatePrivateChannel);
+      if (typeof efn === "function") {
+        var res = efn.call(ens, [userId]);
+        if (res && typeof res.then === "function") {
+          res.then(afterEnsure);
+          note("dmOpen=ensure promise");
+          return;
+        }
+        if (res) {
+          afterEnsure(res);
+          note("dmOpen=ensure");
+          return;
+        }
+      }
+    } catch (err) {
+      note("dmOpen ensure " + err);
+    }
+    try {
+      var opener = byProps("openPrivateChannel");
+      var ofn = opener && opener.openPrivateChannel;
+      if (typeof ofn === "function") {
+        try {
+          ofn.call(opener, { recipientId: userId });
+          note("dmOpen=recipientId");
+          return;
+        } catch (_) {}
+        try {
+          ofn.call(opener, [userId]);
+          note("dmOpen=array1");
+          return;
+        } catch (_) {}
+      }
+    } catch (err) {
+      note("dmOpen open " + err);
+    }
+    toast("Couldn't open DM");
   }
 
   function st() {
@@ -1305,6 +1516,197 @@
     toast("Open Plugins → OnlineNow → gear");
   }
 
+  function aroundCount() {
+    try {
+      return collectNowPeople().length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function NowChip() {
+    if (!e) return null;
+    var n = aroundCount();
+    return e(
+      Pressable,
+      {
+        onPress: openOnlineNowPage,
+        style: {
+          marginHorizontal: 16,
+          marginVertical: 8,
+          paddingVertical: 10,
+          paddingHorizontal: 14,
+          borderRadius: 10,
+          backgroundColor: "#1e2b24",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        },
+      },
+      e(Text, { style: { color: "#3ba55c", fontWeight: "700", fontSize: 13, letterSpacing: 1 } }, n ? "NOW · " + n : "NOW"),
+      e(Text, { style: { color: "#8b8f98", fontSize: 13 } }, "Online friends"),
+    );
+  }
+
+  function injectNowChip(ret) {
+    if (!ret || !e) return ret;
+    if (isFastestEl(ret)) return ret;
+    if (!React || !React.cloneElement) return ret;
+    try {
+      var chip = e(NowChip, { key: "onlinenow-chip" });
+      var kids = ret.props && ret.props.children;
+      if (kids == null) return e(View, { style: { flex: 1 } }, chip, ret);
+      var arr = Array.isArray(kids) ? kids.slice() : [kids];
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i] && arr[i].key === "onlinenow-chip") return ret;
+      }
+      var at = arr.length;
+      for (var j = 0; j < arr.length; j++) {
+        if (isFastestEl(arr[j])) {
+          at = j;
+          break;
+        }
+      }
+      arr.splice(at, 0, chip);
+      return React.cloneElement(ret, { children: arr });
+    } catch (err) {
+      note("chip inject " + err);
+      return ret;
+    }
+  }
+
+  function patchFriendsNowChip() {
+    var names = ["FriendsScreen", "SearchableUserList", "ThemedFriendsNavigator"];
+    var hit = false;
+    for (var i = 0; i < names.length; i++) {
+      var found = findComp([names[i]]);
+      if (!found) continue;
+      hit = true;
+      note("friendsHost=" + found.name);
+      patchAfterRender(
+        found,
+        function (_args, ret) {
+          if (!ret) return ret;
+          try {
+            return injectNowChip(ret);
+          } catch (err) {
+            note("friends wrap " + err);
+            return ret;
+          }
+        },
+        "friendsNow",
+      );
+    }
+    if (!hit) note("friendsHost=none");
+  }
+
+  function HeaderNow() {
+    if (!e) return null;
+    var n = aroundCount();
+    return e(
+      Pressable,
+      {
+        onPress: openOnlineNowPage,
+        hitSlop: 10,
+        style: { paddingHorizontal: 10, paddingVertical: 4 },
+      },
+      e(
+        Text,
+        { style: { color: "#3ba55c", fontWeight: "700", fontSize: 12, letterSpacing: 0.8 } },
+        n ? "NOW · " + n : "NOW",
+      ),
+    );
+  }
+
+  function injectHeaderNow(ret) {
+    if (!ret || !e) return ret;
+    if (isFastestEl(ret)) return ret;
+    if (!React || !React.cloneElement) return ret;
+    try {
+      var btn = e(HeaderNow, { key: "onlinenow-header" });
+      var kids = ret.props && ret.props.children;
+      if (kids == null) {
+        return e(
+          View,
+          { style: { flexDirection: "row", alignItems: "center" } },
+          ret,
+          btn,
+        );
+      }
+      var arr = Array.isArray(kids) ? kids.slice() : [kids];
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i] && arr[i].key === "onlinenow-header") return ret;
+      }
+      arr.push(btn);
+      return React.cloneElement(ret, { children: arr });
+    } catch (err) {
+      note("header inject " + err);
+      return ret;
+    }
+  }
+
+  function hookScreens(names, inject, tag) {
+    var hit = false;
+    for (var i = 0; i < names.length; i++) {
+      var found = findComp([names[i]]);
+      if (!found) continue;
+      hit = true;
+      note(tag + "Host=" + found.name);
+      patchAfterRender(
+        found,
+        function (_args, ret) {
+          if (!ret) return ret;
+          try {
+            return inject(ret);
+          } catch (err) {
+            note(tag + " wrap " + err);
+            return ret;
+          }
+        },
+        tag,
+      );
+    }
+    if (!hit) note(tag + "Host=none");
+  }
+
+  function patchHomeNow() {
+    hookScreens(
+      ["LaunchPad", "HomeHeader", "MainHeader", "AppHeader", "TitleBar", "QuickSwitcher"],
+      injectNowChip,
+      "home",
+    );
+  }
+
+  function patchChatNow() {
+    hookScreens(
+      [
+        "ChatHeader",
+        "ChannelHeader",
+        "HeaderBar",
+        "PrivateChannelHeader",
+        "ChatScreenHeader",
+        "HeaderContainer",
+        "NavigationHeader",
+      ],
+      injectHeaderNow,
+      "chat",
+    );
+  }
+
+  function patchProfileNow() {
+    hookScreens(
+      [
+        "UserProfileHeader",
+        "ProfileActionButtons",
+        "UserProfileActions",
+        "RelationshipButtons",
+        "FriendActionButtons",
+      ],
+      injectHeaderNow,
+      "profile",
+    );
+  }
+
   function registerOnlineNowSection() {
     var register = null;
     try {
@@ -1330,6 +1732,10 @@
               return "OnlineNow";
             },
             onPress: openOnlineNowPage,
+            useTrailing: function () {
+              var n = aroundCount();
+              return n ? n + " around" : "Nobody around";
+            },
           },
         ],
       });
@@ -1693,7 +2099,11 @@
       patchFriends();
       patchDms();
       watchPresence();
-      patchStrip();
+      patchNowTray();
+      patchFriendsNowChip();
+      patchHomeNow();
+      patchChatNow();
+      patchProfileNow();
       patchFriendHeaders();
       registerOnlineNowSection();
       if (storage.patchDiscordLists) {
@@ -1727,8 +2137,12 @@
     }, 1000);
     setTimeout(function () {
       try {
+        patchNowTray();
+        patchFriendsNowChip();
+        patchHomeNow();
+        patchChatNow();
+        patchProfileNow();
         if (storage.patchDiscordLists) {
-          patchStrip();
           patchFriendHeaders();
           patchJsxLists();
           patchListModules();

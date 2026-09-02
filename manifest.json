@@ -1,6 +1,6 @@
 {
   "name": "OnlineNow",
-  "description": "ShiggyCord OnlineNow page \u2014 online friends first. Discord lists off by default (no FastestList crash).",
+  "description": "ShiggyCord: NOW tray on Messages + OnlineNow page. No FastestList wrap.",
   "authors": [
     {
       "name": "OnlineNow",
@@ -8,7 +8,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "d5d62d5197d60445baf4f955557e36d605ed03c81c9164f5110cea06e9b170d1",
+  "hash": "2508bc19acd9bb22ba1a15cbdba83c1b7ba07c3fad65618904d23f9ecaa1cdaa",
   "vendetta": {
     "icon": "ic_person_24px"
   }
