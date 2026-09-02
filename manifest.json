@@ -2,13 +2,13 @@
   "id": "OnlineNow",
   "name": "OnlineNow",
   "spec": 3,
-  "version": "1.2.1",
+  "version": "1.3.1",
   "type": "plugin",
   "display": {
     "name": "OnlineNow",
-    "description": "Online friends first. Message opens a 1:1 DM."
+    "description": "Online first on New Message (+). Tap a face to DM."
   },
-  "description": "Online friends first. Message opens a 1:1 DM.",
+  "description": "Online first on New Message (+). Tap a face to DM.",
   "authors": [
     {
       "name": "OnlineNow",
@@ -16,7 +16,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "3a9c0592723227a0890c591959f67b253276d4f63e935a2dcd68faddd5f8349e",
+  "hash": "c154bfe6b7d587269f74f2136bbeeebfd2574a3bbebdfad77b3e393466d6251e",
   "vendetta": {
     "icon": "ic_person_24px"
   }

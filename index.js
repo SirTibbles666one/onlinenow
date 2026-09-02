@@ -115,6 +115,8 @@
     } catch (_) {}
   }
 
+  var VERSION = "1.3.1";
+
   var DEFAULTS = {
     friendsGrouping: true,
     hideOffline: false,
@@ -872,7 +874,7 @@
       if (st === "online") online.push({ id: ids[i], name: userName(ids[i]), status: st });
       else if (st === "idle") idle.push({ id: ids[i], name: userName(ids[i]), status: st });
     }
-    return online.concat(idle).slice(0, 12);
+    return online.concat(idle).slice(0, 16);
   }
 
   function NowTray() {
@@ -1024,26 +1026,49 @@
     );
   }
 
+  function NowPicker() {
+    var tray = null;
+    try {
+      tray = NowTray();
+    } catch (_) {}
+    if (tray) return tray;
+    return MessagesNowBar();
+  }
+
   function injectNowTray(ret) {
     if (!ret || !e || storage.showNowTray === false) return ret;
     if (isFastestEl(ret)) return ret;
     if (!React || !React.cloneElement) return ret;
     try {
-      var bar = e(MessagesNowBar, { key: "onlinenow-msgbar" });
+      var bar = null;
       var kids = ret.props && ret.props.children;
-      if (kids == null) return e(View, { style: { flex: 1 } }, bar, ret);
+      if (kids == null) return ret;
       var arr = Array.isArray(kids) ? kids.slice() : [kids];
       for (var i = 0; i < arr.length; i++) {
-        if (arr[i] && (arr[i].key === "onlinenow-msgbar" || arr[i].key === "onlinenow-tray")) return ret;
+        var key = arr[i] && arr[i].key;
+        if (key === "onlinenow-msgbar" || key === "onlinenow-tray" || key === "onlinenow-picker") return ret;
       }
       var at = -1;
+      var kind = "bar";
       for (var j = 0; j < arr.length; j++) {
         if (isFastestEl(arr[j])) {
           at = j;
+          kind = "bar";
           break;
         }
-        if (childHasText(arr[j], "Add Friends") || childHasText(arr[j], "Add friends")) {
+        if (childHasText(arr[j], "New Group") || childHasText(arr[j], "New group")) {
+          at = j;
+          kind = "picker";
+          break;
+        }
+        if (
+          childHasText(arr[j], "Add Friends") ||
+          childHasText(arr[j], "Add friends") ||
+          childHasText(arr[j], "Add a Friend") ||
+          childHasText(arr[j], "Add a friend")
+        ) {
           at = j + 1;
+          kind = "bar";
           break;
         }
       }
@@ -1058,7 +1083,12 @@
         }
         return ret;
       }
+      bar =
+        kind === "picker"
+          ? e(NowPicker, { key: "onlinenow-picker" })
+          : e(MessagesNowBar, { key: "onlinenow-msgbar" });
       arr.splice(at, 0, bar);
+      if (kind === "picker") note("pickerHost=New Group");
       return React.cloneElement(ret, { children: arr });
     } catch (err) {
       note("tray inject " + err);
@@ -1087,6 +1117,14 @@
       "ChannelPreviews",
       "SearchablePrivateChannels",
       "ConnectedPrivateChannelsTab",
+      "NewMessage",
+      "NewMessages",
+      "CreateDM",
+      "CreatePrivateChannel",
+      "StartPrivateChannel",
+      "FriendPicker",
+      "UserSearch",
+      "RecipientsSelect",
     ];
     var hit = false;
     for (var i = 0; i < names.length; i++) {
@@ -1129,7 +1167,7 @@
         name = (typeof type === "string" && type) || (type && (type.displayName || type.name)) || "";
       } catch (_) {}
       if (!name || isFastestEl(ret)) return ret;
-      if (!/PrivateChannel|MessagesScreen|^Messages$|Conversation|Recents|DMList|UserChannels/i.test(name)) return ret;
+      if (!/PrivateChannel|MessagesScreen|^Messages$|Conversation|Recents|DMList|UserChannels|NewMessage|CreateDM|FriendPicker|StartPrivate|UserSearch|Recipients/i.test(name)) return ret;
       try {
         return injectNowTray(ret);
       } catch (_) {
@@ -2245,6 +2283,7 @@
     hooks = [];
     debugLog = [];
     hookedPairs = [];
+    note("OnlineNow " + VERSION);
     note("bunny=" + !!(bunnyApi) + " definePlugin=" + typeof definePlug);
     note("patcher.after=" + typeof after + " instead=" + typeof instead);
     note("storage.create=" + typeof (pluginApi && pluginApi.createStorage) + " keys=" + Object.keys(storage || {}).slice(0, 8).join(","));
@@ -2260,10 +2299,6 @@
       watchPresence();
       patchNowTray();
       patchFriendsNowChip();
-      patchHomeNow();
-      patchChatNow();
-      patchProfileNow();
-      patchFriendHeaders();
       registerOnlineNowSection();
       if (storage.patchDiscordLists) {
         patchVisibleBadge();
@@ -2298,9 +2333,6 @@
       try {
         patchNowTray();
         patchFriendsNowChip();
-        patchHomeNow();
-        patchChatNow();
-        patchProfileNow();
         if (storage.patchDiscordLists) {
           patchFriendHeaders();
           patchJsxLists();
@@ -2314,7 +2346,7 @@
       note("PresenceStore=" + !!(pre && pre.getStatus) + " " + fnNames(pre));
       note("ChannelStore=" + !!(ch && ch.getChannel) + " " + fnNames(ch));
       note("PrivateChannelSortStore " + fnNames(byStore("PrivateChannelSortStore")));
-      toast("OnlineNow page ready · Plugins → OnlineNow → gear");
+      toast("OnlineNow " + VERSION + " · Messages → + for online first");
     }, 2500);
   }
 
