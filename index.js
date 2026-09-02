@@ -972,29 +972,93 @@
     );
   }
 
+  function childHasText(el, needle) {
+    if (!el || !needle) return false;
+    if (typeof el === "string") return el.indexOf(needle) >= 0;
+    if (typeof el !== "object") return false;
+    try {
+      var kids = el.props && el.props.children;
+      if (typeof kids === "string") return kids.indexOf(needle) >= 0;
+      if (Array.isArray(kids)) {
+        for (var i = 0; i < kids.length; i++) {
+          if (childHasText(kids[i], needle)) return true;
+        }
+      } else if (kids && typeof kids === "object") {
+        return childHasText(kids, needle);
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  function MessagesNowBar() {
+    if (!e) return null;
+    var n = 0;
+    try {
+      n = aroundCount();
+    } catch (_) {}
+    return e(
+      Pressable,
+      {
+        onPress: openOnlineNowPage,
+        style: {
+          marginHorizontal: 16,
+          marginTop: 8,
+          marginBottom: 6,
+          paddingVertical: 11,
+          paddingHorizontal: 14,
+          borderRadius: 12,
+          backgroundColor: "#1e2b24",
+          borderWidth: 1,
+          borderColor: "#2f5d46",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        },
+      },
+      e(
+        Text,
+        { style: { color: "#3ba55c", fontWeight: "700", fontSize: 14 } },
+        n ? "NOW · " + n + " around" : "NOW",
+      ),
+      e(Text, { style: { color: "#8b8f98", fontSize: 13 } }, "Online friends  →"),
+    );
+  }
+
   function injectNowTray(ret) {
     if (!ret || !e || storage.showNowTray === false) return ret;
     if (isFastestEl(ret)) return ret;
     if (!React || !React.cloneElement) return ret;
     try {
-      var tray = e(NowTray, { key: "onlinenow-tray" });
-      if (!tray) return ret;
+      var bar = e(MessagesNowBar, { key: "onlinenow-msgbar" });
       var kids = ret.props && ret.props.children;
-      if (kids == null) {
-        return e(View, { style: { flex: 1 } }, tray, ret);
-      }
+      if (kids == null) return e(View, { style: { flex: 1 } }, bar, ret);
       var arr = Array.isArray(kids) ? kids.slice() : [kids];
       for (var i = 0; i < arr.length; i++) {
-        if (arr[i] && arr[i].key === "onlinenow-tray") return ret;
+        if (arr[i] && (arr[i].key === "onlinenow-msgbar" || arr[i].key === "onlinenow-tray")) return ret;
       }
-      var at = arr.length;
+      var at = -1;
       for (var j = 0; j < arr.length; j++) {
         if (isFastestEl(arr[j])) {
           at = j;
           break;
         }
+        if (childHasText(arr[j], "Add Friends") || childHasText(arr[j], "Add friends")) {
+          at = j + 1;
+          break;
+        }
       }
-      arr.splice(at, 0, tray);
+      if (at < 0) {
+        for (var k = 0; k < arr.length && k < 8; k++) {
+          if (!arr[k] || !arr[k].props || isFastestEl(arr[k])) continue;
+          var nested = injectNowTray(arr[k]);
+          if (nested !== arr[k]) {
+            arr[k] = nested;
+            return React.cloneElement(ret, { children: arr });
+          }
+        }
+        return ret;
+      }
+      arr.splice(at, 0, bar);
       return React.cloneElement(ret, { children: arr });
     } catch (err) {
       note("tray inject " + err);
@@ -1011,6 +1075,18 @@
       "PrivateChannelList",
       "MessagesScreen",
       "Messages",
+      "MessagesTab",
+      "TabMessages",
+      "ConversationList",
+      "Conversations",
+      "Recents",
+      "RecentConversations",
+      "DMList",
+      "UserChannels",
+      "PrivateChannelPreviews",
+      "ChannelPreviews",
+      "SearchablePrivateChannels",
+      "ConnectedPrivateChannelsTab",
     ];
     var hit = false;
     for (var i = 0; i < names.length; i++) {
@@ -1033,6 +1109,40 @@
       );
     }
     if (!hit) note("nowHost=none");
+    patchNowJsx();
+  }
+
+  function patchNowJsx() {
+    var jsxMod = null;
+    try {
+      jsxMod = byProps("jsx", "jsxs") || (React && React.createElement && null);
+    } catch (_) {}
+    if (!jsxMod || !after) {
+      note("nowJsx=no");
+      return;
+    }
+    function wrap(args, ret) {
+      if (!ret || storage.showNowTray === false) return ret;
+      var type = args && args[0];
+      var name = "";
+      try {
+        name = (typeof type === "string" && type) || (type && (type.displayName || type.name)) || "";
+      } catch (_) {}
+      if (!name || isFastestEl(ret)) return ret;
+      if (!/PrivateChannel|MessagesScreen|^Messages$|Conversation|Recents|DMList|UserChannels/i.test(name)) return ret;
+      try {
+        return injectNowTray(ret);
+      } catch (_) {
+        return ret;
+      }
+    }
+    try {
+      unpatches.push(after("jsx", jsxMod, wrap));
+      unpatches.push(after("jsxs", jsxMod, wrap));
+      note("nowJsx=ok");
+    } catch (err) {
+      note("nowJsx err " + err);
+    }
   }
 
   function patchFriendHeaders() {

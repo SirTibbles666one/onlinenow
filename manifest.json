@@ -2,7 +2,7 @@
   "id": "OnlineNow",
   "name": "OnlineNow",
   "spec": 3,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "plugin",
   "display": {
     "name": "OnlineNow",
@@ -16,7 +16,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "3bad786fee3375a12c461be23ee5d5f89a95ae674938e23869c2a7e5427c5a5a",
+  "hash": "3a9c0592723227a0890c591959f67b253276d4f63e935a2dcd68faddd5f8349e",
   "vendetta": {
     "icon": "ic_person_24px"
   }
