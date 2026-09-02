@@ -2,13 +2,19 @@
   "use strict";
 
   var root = typeof globalThis !== "undefined" ? globalThis : this;
-  var bunnyApi = typeof bunny !== "undefined" ? bunny : null;
+  var bunnyApi =
+    (typeof bunny !== "undefined" && bunny) ||
+    (root && root.bunny) ||
+    null;
+  var definePlug = typeof definePlugin === "function" ? definePlugin : null;
+  var vdGlobal = null;
+  try {
+    vdGlobal = vendetta;
+  } catch (_) {}
+  if (!vdGlobal && root) vdGlobal = root.vendetta;
 
   function vdRequire(id) {
-    var vd =
-      (typeof vendetta !== "undefined" && vendetta) ||
-      (root && root.vendetta) ||
-      {};
+    var vd = vdGlobal || {};
     try {
       if (typeof require === "function") {
         var got = require(id);
@@ -26,10 +32,11 @@
       if (id === "@vendetta") return vd;
     }
     if (bunnyApi) {
-      if (id === "@vendetta/metro") return bunnyApi.metro || vd.metro;
+      if (id === "@vendetta/metro") return bunnyApi.metro || (bunnyApi.api && bunnyApi.api.metro) || vd.metro;
       if (id === "@vendetta/metro/common")
         return (bunnyApi.metro && bunnyApi.metro.common) || (vd.metro && vd.metro.common);
-      if (id === "@vendetta/patcher") return bunnyApi.patcher || vd.patcher;
+      if (id === "@vendetta/patcher")
+        return (bunnyApi.api && bunnyApi.api.patcher) || bunnyApi.patcher || vd.patcher;
       if (id === "@vendetta/plugin") return bunnyApi.plugin || vd.plugin;
       if (id === "@vendetta/storage") return bunnyApi.storage || vd.storage;
       if (id === "@vendetta/ui/toasts")
@@ -67,14 +74,27 @@
   var common = vdRequire("@vendetta/metro/common") || (metro.common) || {};
   var React = common.React || (root && root.React);
   var ReactNative = common.ReactNative || (root && root.ReactNative);
-  var patcher = vdRequire("@vendetta/patcher") || (bunnyApi && bunnyApi.patcher) || {};
+  var patcher =
+    (bunnyApi && bunnyApi.api && bunnyApi.api.patcher) ||
+    (bunnyApi && bunnyApi.patcher) ||
+    vdRequire("@vendetta/patcher") ||
+    (root && root.bunny && root.bunny.api && root.bunny.api.patcher) ||
+    {};
   var after = patcher.after;
   var instead = patcher.instead;
-  var pluginApi = vdRequire("@vendetta/plugin") || (bunnyApi && bunnyApi.plugin) || {};
-  var storage = pluginApi.storage || {};
+  var pluginApi = (bunnyApi && bunnyApi.plugin) || vdRequire("@vendetta/plugin") || {};
+  var storage = pluginApi.storage;
+  if (!storage && pluginApi && typeof pluginApi.createStorage === "function") {
+    try {
+      storage = pluginApi.createStorage();
+    } catch (_) {
+      storage = null;
+    }
+  }
+  if (!storage) storage = {};
   var useProxy = (vdRequire("@vendetta/storage") || {}).useProxy;
   var Forms = (vdRequire("@vendetta/ui/components") || {}).Forms || {};
-  var toasts = vdRequire("@vendetta/ui/toasts") || {};
+  var toasts = vdRequire("@vendetta/ui/toasts") || (bunnyApi && bunnyApi.ui && bunnyApi.ui.toasts) || {};
 
   var e = React && React.createElement;
   var View = ReactNative && ReactNative.View;
@@ -109,7 +129,7 @@
   for (var k in DEFAULTS) {
     if (storage[k] === undefined) storage[k] = DEFAULTS[k];
   }
-  storage._v = 6;
+  storage._v = 7;
   storage.patchDiscordLists = false;
   storage.showNowTray = storage.showNowTray !== false;
   storage.dmOnlineFirst = true;
@@ -221,6 +241,20 @@
       return findFn("getChannel", "getDMFromUserId");
     }, function () {
       return findFn("getDMFromUserId");
+    }, function () {
+      return byProps("getDMFromUserId");
+    }, function () {
+      return byStore("PrivateChannelStore");
+    });
+  }
+
+  function UserStore() {
+    return pick(function () {
+      return byStore("UserStore");
+    }, function () {
+      return findFn("getUser", "getCurrentUser");
+    }, function () {
+      return byProps("getUser", "getCurrentUser");
     });
   }
 
@@ -234,6 +268,12 @@
       if (typeof x.length === "number") return Array.prototype.slice.call(x);
     } catch (_) {}
     return [];
+  }
+
+  function friendId(x) {
+    if (x == null) return "";
+    if (typeof x === "object") return String(x.id || x.userId || x.user_id || "");
+    return String(x);
   }
 
   function statusOf(id) {
@@ -782,7 +822,7 @@
               key: String(id),
               style: { width: 64, alignItems: "center", marginHorizontal: 4 },
               onPress: function () {
-                if (open) Promise.resolve(open(id));
+                openDM(id);
               },
             },
             e(
@@ -824,17 +864,13 @@
   }
 
   function collectNowPeople() {
-    var rel = RelationshipStore();
-    var ids = [];
-    try {
-      ids = asArray(rel && rel.getFriendIDs && rel.getFriendIDs());
-    } catch (_) {}
+    var ids = friendIds();
     var online = [];
     var idle = [];
     for (var i = 0; i < ids.length; i++) {
       var st = statusOf(ids[i]);
-      if (st === "online") online.push({ id: String(ids[i]), name: userName(ids[i]), status: st });
-      else if (st === "idle") idle.push({ id: String(ids[i]), name: userName(ids[i]), status: st });
+      if (st === "online") online.push({ id: ids[i], name: userName(ids[i]), status: st });
+      else if (st === "idle") idle.push({ id: ids[i], name: userName(ids[i]), status: st });
     }
     return online.concat(idle).slice(0, 12);
   }
@@ -1146,26 +1182,38 @@
   }
 
   function userName(id) {
+    id = friendId(id);
     try {
-      var us = byStore("UserStore");
-      var u = us && us.getUser && us.getUser(String(id));
-      if (!u) return String(id).slice(0, 8);
-      return u.globalName || u.displayName || u.username || String(id).slice(0, 8);
+      var us = UserStore();
+      var u = us && us.getUser && (us.getUser(id) || us.getUser(String(id)));
+      if (!u) return id ? id.slice(-4) : "?";
+      return u.globalName || u.displayName || u.username || u.tag || id.slice(-4);
     } catch (_) {
-      return String(id).slice(0, 8);
+      return id ? id.slice(-4) : "?";
     }
   }
 
-  function listFriends(query) {
+  function friendIds() {
     var rel = RelationshipStore();
-    var ids = [];
+    var raw = [];
     try {
-      ids = asArray(rel && rel.getFriendIDs && rel.getFriendIDs());
+      if (rel && rel.getFriendIDs) raw = asArray(rel.getFriendIDs());
+      if (!raw.length && rel && rel.getFriendIds) raw = asArray(rel.getFriendIds());
     } catch (_) {}
+    var out = [];
+    for (var i = 0; i < raw.length; i++) {
+      var id = friendId(raw[i]);
+      if (id && /^\d{5,}$/.test(id)) out.push(id);
+    }
+    return out;
+  }
+
+  function listFriends(query) {
+    var ids = friendIds();
     var q = String(query || "").trim().toLowerCase();
     var rows = [];
     for (var i = 0; i < ids.length; i++) {
-      var id = String(ids[i]);
+      var id = ids[i];
       var name = userName(id);
       if (q && name.toLowerCase().indexOf(q) < 0 && id.indexOf(q) < 0) continue;
       var st = statusOf(id);
@@ -1179,16 +1227,42 @@
     }
     rows.sort(function (a, b) {
       if (a.rank !== b.rank) return a.rank - b.rank;
-      return a.name.localeCompare(b.name);
+      return String(a.name).localeCompare(String(b.name));
     });
     return rows;
+  }
+
+  function navRoot() {
+    try {
+      var refApi = byProps("getRootNavigationRef");
+      var nav = refApi && refApi.getRootNavigationRef && refApi.getRootNavigationRef();
+      if (nav) return nav;
+    } catch (_) {}
+    try {
+      var NN = common.NavigationNative;
+      if (NN && typeof NN.getNavigationRef === "function") return NN.getNavigationRef();
+    } catch (_) {}
+    return null;
   }
 
   function selectChannel(channelId) {
     if (channelId == null) return false;
     if (typeof channelId === "object") channelId = channelId.id || channelId.channelId || channelId.channel_id;
     channelId = String(channelId);
-    if (!channelId || channelId === "undefined") return false;
+    if (!channelId || channelId === "undefined" || !/^\d{5,}$/.test(channelId)) return false;
+    try {
+      var nav = navRoot();
+      if (nav && typeof nav.navigate === "function") {
+        try {
+          nav.navigate("CHANNEL", { channelId: channelId, guildId: null });
+          return true;
+        } catch (_) {}
+        try {
+          nav.navigate("Chat", { channelId: channelId });
+          return true;
+        } catch (_) {}
+      }
+    } catch (_) {}
     try {
       var sel = byProps("selectPrivateChannel") || byProps("selectChannel");
       if (sel && typeof sel.selectPrivateChannel === "function") {
@@ -1217,38 +1291,57 @@
     return false;
   }
 
-  function openDM(userId) {
-    userId = String(userId);
-    note("dmOpen id=" + userId);
+  function jumpToUserDM(userId) {
     try {
       var cs = ChannelStore();
       var existing = cs && cs.getDMFromUserId && cs.getDMFromUserId(userId);
-      if (existing && selectChannel(existing)) {
-        note("dmOpen=existing");
-        return;
-      }
-    } catch (err) {
-      note("dmOpen exist " + err);
+      if (existing && selectChannel(existing)) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function openDM(userId) {
+    userId = friendId(userId);
+    note("dmOpen id=" + userId);
+    if (!/^\d{5,}$/.test(userId)) {
+      note("dmOpen bad id");
+      toast("Couldn't open DM");
+      return;
+    }
+    if (jumpToUserDM(userId)) {
+      note("dmOpen=existing");
+      return;
     }
     function afterEnsure(id) {
       try {
         if (id && typeof id === "object") id = id.id || id.channelId || id.channel_id;
-        if (id) selectChannel(id);
+        setTimeout(function () {
+          if (jumpToUserDM(userId)) {
+            note("dmOpen=after existing");
+            return;
+          }
+          if (id) selectChannel(id);
+        }, 80);
       } catch (_) {}
     }
     try {
-      var ens = byProps("ensurePrivateChannel") || byProps("getOrCreatePrivateChannel");
-      var efn = ens && (ens.ensurePrivateChannel || ens.getOrCreatePrivateChannel);
+      var ens = byProps("ensurePrivateChannel") || byProps("getOrCreatePrivateChannel") || byProps("getOrCreateDM");
+      var efn = ens && (ens.ensurePrivateChannel || ens.getOrCreatePrivateChannel || ens.getOrCreateDM);
       if (typeof efn === "function") {
-        var res = efn.call(ens, [userId]);
+        var res = null;
+        try {
+          res = efn.call(ens, userId);
+          note("dmOpen=ensure string");
+        } catch (_) {
+          res = efn.call(ens, [userId]);
+          note("dmOpen=ensure array");
+        }
         if (res && typeof res.then === "function") {
           res.then(afterEnsure);
-          note("dmOpen=ensure promise");
           return;
         }
         if (res) {
           afterEnsure(res);
-          note("dmOpen=ensure");
           return;
         }
       }
@@ -1871,22 +1964,8 @@
         }
       } catch (_) {}
     }
-    if (next && !props.ListHeaderComponent) next.ListHeaderComponent = onlineHeader;
-    if (next) next.extraData = "onlinenow-" + presenceGen;
-    if (next && typeof props.renderItem === "function") {
-      var origRI = props.renderItem;
-      next.renderItem = function (info) {
-        var row = origRI(info);
-        if (!row || !e || !View) return row;
-        var item = info && (info.item != null ? info.item : info);
-        var id = item && (item.id || item.channel_id || item.channelId || item.userId || item);
-        var r = 3;
-        try {
-          r = rankChannel(id);
-        } catch (_) {}
-        var color = r === 0 ? "#3ba55c" : r === 1 ? "#faa61a" : r === 2 ? "#ed4245" : "#4f545c";
-        return e(View, { style: { borderLeftWidth: 3, borderLeftColor: color } }, row);
-      };
+    if (next) {
+      /* never ListHeaderComponent / extraData / renderItem — FastestList crash */
     }
     return next;
   }
@@ -2023,40 +2102,8 @@
   }
 
   function wrapListRender(C, name) {
-    if (!C || !instead) return false;
-    var proto = C.prototype;
-    if (!proto || typeof proto.render !== "function") return false;
-    for (var h = 0; h < hookedPairs.length; h++) {
-      if (hookedPairs[h][0] === proto && hookedPairs[h][1] === "render") return false;
-    }
-    hookedPairs.push([proto, "render"]);
-    try {
-      unpatches.push(
-        instead("render", proto, function (args, orig) {
-          try {
-            var self = this;
-            var next = self && sortedProps(self.props);
-            if (!next) return orig.apply(self, args);
-            var prev = self.props;
-            self.props = Object.assign({}, prev, next);
-            try {
-              return orig.apply(self, args);
-            } finally {
-              self.props = prev;
-            }
-          } catch (err) {
-            note("render fail " + name + " " + err);
-            return orig.apply(this, args);
-          }
-        }),
-      );
-      hooks.push("list:" + name);
-      note("messagesImpl=" + name);
-      return true;
-    } catch (err) {
-      note("list fail " + name + " " + err);
-      return false;
-    }
+    note("list wrap skipped:" + name);
+    return false;
   }
 
   function scanListNames() {
@@ -2088,7 +2135,9 @@
     hooks = [];
     debugLog = [];
     hookedPairs = [];
-    note("bunny=" + (bunnyApi ? Object.keys(bunnyApi).slice(0, 12).join(",") : "no"));
+    note("bunny=" + !!(bunnyApi) + " definePlugin=" + typeof definePlug);
+    note("patcher.after=" + typeof after + " instead=" + typeof instead);
+    note("storage.create=" + typeof (pluginApi && pluginApi.createStorage) + " keys=" + Object.keys(storage || {}).slice(0, 8).join(","));
     note("metro=" + Object.keys(metro || {}).slice(0, 12).join(","));
     note("after=" + typeof after + " instead=" + typeof instead);
     note("findByProps=" + typeof findByProps + " store=" + typeof findByStoreName);
@@ -2174,7 +2223,7 @@
     hooks = [];
   }
 
-  return {
+  var instance = {
     onLoad: onLoad,
     onUnload: onUnload,
     start: onLoad,
@@ -2183,4 +2232,10 @@
     Settings: Settings,
     SettingsComponent: Settings,
   };
+  if (definePlug) {
+    try {
+      instance = definePlug(instance) || instance;
+    } catch (_) {}
+  }
+  return instance;
 })())

@@ -1,10 +1,12 @@
 # OnlineNow for ShiggyCord
 
-Online friends first. Open the **OnlineNow** page (Plugins → gear). **Message** opens that person’s DM.
+Bunny plugin (`start` / `SettingsComponent`). Online friends first. **Message** opens a 1:1 DM.
 
-## Install (every update)
+## Install (required after every file change)
 
-1. Uninstall OnlineNow if it is already listed  
+Reshiggy does **not** re-download the plugin.
+
+1. Uninstall OnlineNow  
 2. Plugins **+** paste:
 
 ```
@@ -15,3 +17,5 @@ https://raw.githubusercontent.com/SirTibbles666one/onlinenow/main/
 4. Plugins → OnlineNow → **gear**
 
 Leave **Also sort Discord lists** off.
+
+Gear **Plugin debug** should show `bunny=true` and `patcher.after=function`.

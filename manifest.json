@@ -1,6 +1,14 @@
 {
+  "id": "OnlineNow",
   "name": "OnlineNow",
-  "description": "ShiggyCord: NOW tray on Messages + OnlineNow page. No FastestList wrap.",
+  "spec": 3,
+  "version": "1.2.0",
+  "type": "plugin",
+  "display": {
+    "name": "OnlineNow",
+    "description": "Online friends first. Message opens a 1:1 DM."
+  },
+  "description": "Online friends first. Message opens a 1:1 DM.",
   "authors": [
     {
       "name": "OnlineNow",
@@ -8,7 +16,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "2508bc19acd9bb22ba1a15cbdba83c1b7ba07c3fad65618904d23f9ecaa1cdaa",
+  "hash": "3bad786fee3375a12c461be23ee5d5f89a95ae674938e23869c2a7e5427c5a5a",
   "vendetta": {
     "icon": "ic_person_24px"
   }
